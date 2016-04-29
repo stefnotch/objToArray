@@ -8,6 +8,7 @@
  *--------------------------------------------------------------
 */
 //TODO If the vertex doesn't have an adjacent vertex on any of the edges, it won't work as intended. That needs to be fixed.
+//I don't think that is an issue anymore
 //http://web.cse.ohio-state.edu/~hwshen/581/Site/Lab3_files/Labhelp_Obj_parser.htm
 using System;
 using System.Collections.Generic;
@@ -68,6 +69,15 @@ namespace FileTest
 							{
 								//printError("Line length = 0");
 							}
+							else if (currentLine[0] == '#' || currentLine[0] == 's' || currentLine[0] == 'g' || currentLine[0] == 'o' || currentLine.StartsWith("mtllib"))
+							{
+								//Do nothing
+							}
+							else if (currentLine.IndexOf("usemtl") > -1)
+							{
+								faces.Add(new int[] { texNames.Count });
+								texNames.Add("new" + currentLine.Substring(3));
+							}
 							else if (currentLine.IndexOf("vt") > -1)
 							{
 								string[] uv = currentLine.Substring(2).Trim(' ').Split(' ');
@@ -124,15 +134,6 @@ namespace FileTest
 
 								faces.Add(addToFaces);
 							}
-							else if (currentLine.IndexOf("usemtl") > -1)
-							{
-								faces.Add(new int[] { texNames.Count });
-								texNames.Add("new" + currentLine.Substring(3));
-							}
-							else if (currentLine[0] == '#' || currentLine[0] == 's' || currentLine[0] == 'g' || currentLine[0] == 'o')
-							{
-								//Do nothing
-							}
 							else
 							{
 								Console.WriteLine(currentLine);
@@ -164,7 +165,8 @@ namespace FileTest
 									printError("CONVERT TO PNG!");
 								}
 								else {
-									images.Add(currMTL, currentLine.Replace("map_Kd", "").Replace("\\", "/").Trim());
+									if (currentLine.Trim().Split(' ').Length > 1)
+										images.Add(currMTL, currentLine.Replace("map_Kd", "").Replace("\\", "/").Trim());
 								}
 							}
 						}
@@ -373,6 +375,8 @@ namespace FileTest
 					 */
 					#endregion
 
+
+					//Speed this up!!
 					//Barycentric coords array, stores indices to the barystring 
 					//Each face/triangle has 3 bary coords
 					int[,] bary = new int[faces.Count, 3]; //Filled with: default( int )
@@ -418,66 +422,6 @@ namespace FileTest
 														int oppPointOther = -(matchingPointOther + vertOther) + 3;
 														bary[i, oppPointOther] = oppPointOther + 1;
 													}
-
-
-													//Big long if statements (Until I can figure out something cooler/better)
-													/*if (vert == 2)
-													{
-														if (matchingPoint == currFace[(vert - 1) * length])
-														{
-															bary[j, vert - 2] = baryString[vert - 2];
-														}
-														else if (matchingPoint == currFace[(vert - 2) * length])
-														{
-															bary[j, vert - 1] = baryString[vert - 1];
-														}
-													}
-													else if (vert == 1)
-													{
-														if (matchingPoint == currFace[(vert - 1) * length])
-														{
-															bary[j, vert + 1] = baryString[vert + 1];
-														}
-													}
-													else
-													{
-														printError("The 2nd vertex can't be 0" + vert);
-													}
-
-													//TODO for other face
-													if (vertOther == 2)
-													{
-														if (matchingPoint == faces[i][(vertOther - 1) * length])
-														{
-															bary[i, vertOther - 2] = baryString[vertOther - 2];
-														}
-														else if (matchingPoint == faces[i][(vertOther - 2) * length])
-														{
-															bary[i, vertOther - 1] = baryString[vertOther - 1];
-														}
-													}
-													else if (vertOther == 1)
-													{
-														if (matchingPoint == faces[i][(vertOther - 1) * length])
-														{
-															bary[i, vertOther + 1] = baryString[vertOther + 1];
-														}
-													}
-													else
-													{
-														//TODO Fix this
-														printError("The 2nd vertex can't be 0!!! " + vertOther);
-													}*/
-
-													//The 2 matching points are: 
-													//currFace[vert * length] or faces[i][vertOther * length] (same point, different triangle) 
-													//(Triangle indices are: j and i)
-													//AND matchingPoint (previous matching point)
-
-													//if (Math.Abs(MatMath.dotProcuct(faceNormals[tri / 9], faceNormals[triOther / 9])) < threshold)
-													//{
-
-													//}
 													adj++;
 													goto nextTriangle;
 												}
@@ -486,56 +430,6 @@ namespace FileTest
 												matchingPointOther = vertOther;
 												vertOther = 3;
 											}
-											/*else
-											{
-												//double[] ver = toVertices(vertices[faces[j][vert * length]], vertices[faces[i][vertOther * length]]);
-
-												//if(Math.Abs(ver[0] - ver[3]) < 0.1 && Math.Abs(ver[1] - ver[4]) < 0.1 && Math.Abs(ver[2] - ver[5]) < 0.1)
-												string[] ve = vertices[faces[j][vert * length]].Split(',');
-
-												for (int xk = 0; xk < ve.Length; xk++)
-												{
-													ve[xk] = ve[xk].Substring(0, 8);
-												}
-
-												string[] ve1 = vertices[faces[i][vertOther * length]].Split(',');
-
-												bool mk = true;
-												for (int xk = 0; xk < ve1.Length; xk++)
-												{
-													if(ve1[xk].Substring(0, 8) != ve[xk])
-													{
-														mk = false;
-													}
-												}
-
-												if (mk)
-												{
-													//System.Diagnostics.Debugger.Break();
-													if (matchingPointThis != -1)
-													{
-
-														//Opposite point: -(matchingPointThis + vert) + 3
-														int oppPointThis = -(matchingPointThis + vert) + 3;
-
-
-														bary[j, oppPointThis] = ",0,0,0";//baryString[oppPointThis];
-
-														int oppPointOther = -(matchingPointOther + vertOther) + 3;
-														bary[i, oppPointOther] = ",0,0,0";// = baryString[oppPointOther];
-
-														//Big long if statements (Until I can figure out something cooler/better)
-														adj++;
-														goto nextTriangle;
-													}
-													//One point matches, check if another point matches
-													matchingPointThis = vert;
-													matchingPointOther = vertOther;
-													vertOther = 3;
-												}
-												
-											}*/
-
 										}
 									}
 								}
@@ -695,6 +589,13 @@ namespace FileTest
 
 		}
 
+		/// <summary>
+		/// Turns a bunch of random numbers into valid barycentric coordinates
+		/// </summary>
+		/// <param name="one"></param>
+		/// <param name="two"></param>
+		/// <param name="three"></param>
+		/// <returns></returns>
 		static string[] toBary(int one, int two, int three)
 		{
 			int[] bary = {
