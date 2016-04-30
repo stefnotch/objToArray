@@ -30,8 +30,15 @@ namespace FileTest
 
 				if (fileName == "./obj/")
 				{
-					fileName = Directory.GetFiles("./obj")[0];
-
+					string[] possibleFiles = Directory.GetFiles("./obj");
+					foreach (string currFileName in possibleFiles)
+					{
+						if (currFileName.EndsWith(".obj") && File.Exists(currFileName.Replace(".obj", ".mtl")))
+						{
+							fileName = currFileName;
+							break;
+						}
+					}
 				}
 				fileName = fileName.Replace(".mtl", "").Replace(".obj", "");
 				//If it exists, read it
@@ -84,12 +91,9 @@ namespace FileTest
 								//Flip the y coordinate of the UV
 								if (uv.Length > 2)
 								{
-									printError("Too long UVs");
+									printError("Too long UVs: " + currentLine);
 								}
-								else
-								{
-									uv[1] = (1 - Double.Parse(uv[1])).ToString();
-								}
+								uv[1] = (1 - Double.Parse(uv[1])).ToString();
 								uvs.Add(String.Join(",", uv));
 							}
 							else if (currentLine.IndexOf("vn") > -1)
@@ -112,7 +116,7 @@ namespace FileTest
 									}
 									else
 									{
-										printError("Inconsistent face lengths");
+										printError("Inconsistent face lengths: " + currentLine + length);
 									}
 								}
 								//The array that will get added to the faces
@@ -166,12 +170,16 @@ namespace FileTest
 								}
 								else {
 									if (currentLine.Trim().Split(' ').Length > 1)
-										images.Add(currMTL, currentLine.Replace("map_Kd", "").Replace("\\", "/").Trim());
+										//If it doesn't already containt that key
+										if (!images.ContainsKey(currMTL))
+											images.Add(currMTL, currentLine.Replace("map_Kd", "").Replace("\\", "/").Trim());
 								}
 							}
 						}
 					}
 					#endregion
+
+					//TODO Fix the empty newmtl
 
 					//Divide the length by 3
 					length = length / 3;
@@ -379,17 +387,21 @@ namespace FileTest
 					//Speed this up!!
 					//Barycentric coords array, stores indices to the barystring 
 					//Each face/triangle has 3 bary coords
+					//TODO [][] is faster
 					int[,] bary = new int[faces.Count, 3]; //Filled with: default( int )
 					const double threshold = 0.7;
+
+					int prevJ = faces.Count;
 					//Lines:
-					for (int j = 0; j < faces.Count; j++)
+					//TODO counting down is faster
+					for (int j = faces.Count - 1; j >= 0; j--)
 					{
 						if (faces[j].Length > 1)
 						{
 							int adj = 0; //Adjacent triangles
 										 //Loop over all the other triangles
 										 //TODO
-							for (int i = j + 1; i < faces.Count && adj < 3; i++)
+							for (int i = j - 1; i >= 0 && adj < 3; i--)
 							{
 								if (faces[i].Length > 1)
 								{
@@ -437,6 +449,12 @@ namespace FileTest
 								nextTriangle:;
 							}
 						}
+
+						if (prevJ - j > 1000)
+						{
+							Console.WriteLine("{0}% done", (1 - (double)j / faces.Count) * 100);
+							prevJ = j;
+						}
 					}
 
 
@@ -445,8 +463,15 @@ namespace FileTest
 						int[] currFace = faces[j];
 						if (currFace.Length == 1)
 						{
-							//Aww, yeah! That's what I call awesome code! 
-							string image = images[texNames[currFace[0]]];
+							string image;
+							if (!images.ContainsKey(texNames[currFace[0]]))
+							{
+								image = "nonexistent.png";
+							}
+							else {
+								//Aww, yeah! That's what I call awesome code! 
+								image = images[texNames[currFace[0]]];
+							}
 							Console.WriteLine(image);
 							if (j == 0)
 							{
