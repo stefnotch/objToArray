@@ -472,7 +472,8 @@ namespace FileTest
 									}
 								}
 							}
-							//Single matching points:						}
+						}
+						//Single matching points:						
 						if (prevJ - j > 1000)
 						{
 							Console.WriteLine("{0}% done", (1 - (double)j / faces.Count) * 100);
