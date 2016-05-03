@@ -13,6 +13,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 
 namespace FileTest
 {
@@ -61,6 +62,8 @@ namespace FileTest
 					List<string> texNames = new List<string>();
 					List<int[]> faces = new List<int[]>();
 
+					List<string> parts = new List<string>();
+
 					//Does it have UVs
 					bool hasUvs = true;
 					//Length of the triangle. (3=>only vertices, 6=>vertices and uvs, 9 => vertices, uvs, and normals)
@@ -72,20 +75,22 @@ namespace FileTest
 						string currentLine;
 						while ((currentLine = objReader.ReadLine()) != null)
 						{
+							//Just making it a bit foolproof
+							currentLine = currentLine.Trim();
 							if (currentLine.Length == 0)
 							{
 								//printError("Line length = 0");
 							}
-							else if (currentLine[0] == '#' || currentLine[0] == 's' || currentLine[0] == 'g' || currentLine[0] == 'o' || currentLine.StartsWith("mtllib"))
+							else if (currentLine[0] == '#' || currentLine[0] == 's' || currentLine[0] == 'o' || currentLine.StartsWith("mtllib"))
 							{
 								//Do nothing
 							}
-							else if (currentLine.IndexOf("usemtl") > -1)
+							else if (currentLine.StartsWith("usemtl"))
 							{
 								faces.Add(new int[] { texNames.Count });
 								texNames.Add("new" + currentLine.Substring(3));
 							}
-							else if (currentLine.IndexOf("vt") > -1)
+							else if (currentLine.StartsWith("vt"))
 							{
 								string[] uv = currentLine.Substring(2).Trim(' ').Split(' ');
 								//Flip the y coordinate of the UV
@@ -96,17 +101,16 @@ namespace FileTest
 								uv[1] = (1 - Double.Parse(uv[1])).ToString();
 								uvs.Add(String.Join(",", uv));
 							}
-							else if (currentLine.IndexOf("vn") > -1)
+							else if (currentLine.StartsWith("vn"))
 							{
 								normals.Add(currentLine.Substring(2).Trim(' ').Replace(' ', ','));
 							}
-							else if (currentLine.IndexOf("v") > -1)
+							else if (currentLine.StartsWith("v"))
 							{
 								vertices.Add(currentLine.Substring(1).Trim(' ').Replace(' ', ','));
 							}
-							else if (currentLine.IndexOf("f") > -1)
+							else if (currentLine.StartsWith("f"))
 							{
-								//faces.Add(currentLine.Substring(1).Trim(' '));
 								string[] currentFace = currentLine.Substring(1).Trim(' ').Split(' ', '/');
 								if (currentFace.Length != length)
 								{
@@ -137,6 +141,27 @@ namespace FileTest
 								}
 
 								faces.Add(addToFaces);
+							}
+							else if (currentLine[0] == 'g') //obj group
+							{
+								string groupName = currentLine.Substring(1).Trim(' ').Replace(' ', ',');
+								if (groupName == "(null)")
+								{
+									groupName = "notYetDefined";
+									printError("Everything needs to be part of a vertex group, non-fatal error");
+								}
+								//Bone, another attribute for all vertices!
+								int groupIndex = parts.IndexOf(groupName);
+								if (groupIndex > -1)
+								{
+									faces.Add(new int[] { groupIndex, 0 });
+								}
+								else
+								{
+									faces.Add(new int[] { parts.Count, 0 });
+									parts.Add(groupName);
+								}
+
 							}
 							else
 							{
@@ -183,17 +208,13 @@ namespace FileTest
 
 					//Divide the length by 3
 					length = length / 3;
-					string[] baryString = {",0,0,0",
-						",0,1,0",
-						",1,0,0",
-						",0,0,1" };
 					//I hope this works
 					double[][] faceNormals = new double[faces.Count][];
 					JSONFile.Write("var model = [");
 					#region Face normals
 					for (int j = 0; j < faces.Count; j++)
 					{
-						if (faces[j].Length != 1)
+						if (faces[j].Length > 2)
 						{
 							int[] currFace = faces[j];
 							//currFace[0*length] currFace[1 * length ] currFace[2*length]
@@ -385,71 +406,73 @@ namespace FileTest
 
 
 					//Speed this up!!
-					//Barycentric coords array, stores indices to the barystring 
-					//Each face/triangle has 3 bary coords
-					//TODO [][] is faster
-					int[,] bary = new int[faces.Count, 3]; //Filled with: default( int )
-					const double threshold = 0.7;
-
-					int prevJ = faces.Count;
-					//Lines:
-					//TODO counting down is faster
+					var toLookup = new List<KeyValuePair<string, int>>();
 					for (int j = faces.Count - 1; j >= 0; j--)
 					{
-						if (faces[j].Length > 1)
+						if (faces[j].Length > 2)
 						{
-							int adj = 0; //Adjacent triangles
-										 //Loop over all the other triangles
-										 //TODO
-							for (int i = j - 1; i >= 0 && adj < 3; i--)
+							for (var vert = 0; vert < 3; vert++)
 							{
-								if (faces[i].Length > 1)
-								{
-									int matchingPointThis = -1;
-									int matchingPointOther = -1;
-									//For each point of the current triangle
-									for (var vert = 0; vert < 3; vert++)
-									{
-										//Check if a point on another triangle matches
-										for (var vertOther = 0; vertOther < 3; vertOther++)
-										{
-											if (vertices[faces[j][vert * length]] == vertices[faces[i][vertOther * length]])
-											{
-												//System.Diagnostics.Debugger.Break();
-												if (matchingPointThis != -1)
-												{
-													/* matchingPoint exists on both triangles. 
-													 * matchingPoint is just an index to some vertices and is EQUAL on both triangles
-													 * 
-													*/
-
-													//Opposite point: -(matchingPointThis + vert) + 3
-
-													if (Math.Abs(dotProcuct(faceNormals[j], faceNormals[i])) < threshold)
-													{
-														int oppPointThis = -(matchingPointThis + vert) + 3;
-
-														bary[j, oppPointThis] = oppPointThis + 1;
-
-														int oppPointOther = -(matchingPointOther + vertOther) + 3;
-														bary[i, oppPointOther] = oppPointOther + 1;
-													}
-													adj++;
-													goto nextTriangle;
-												}
-												//One point matches, check if another point matches
-												matchingPointThis = vert;
-												matchingPointOther = vertOther;
-												vertOther = 3;
-											}
-										}
-									}
-								}
-								//A valid use of goto. (C# creators, labeled break is a lot better. *hint, hint*)
-								nextTriangle:;
+								toLookup.Add(new KeyValuePair<string, int>(vertices[faces[j][vert * length]], j));
 							}
 						}
-
+					}
+					//TODO [][] is faster, not anymore??
+					double[,] bary = new double[faces.Count, 3]; //Filled with: default( int )
+					const double threshold = 0.6;
+					const double addTo = 1 - threshold;
+					int prevJ = faces.Count;
+					Lookup<string, int> adj = (Lookup<string, int>)toLookup.ToLookup((item) => item.Key, (item) => item.Value);
+					/*
+					 Lookup<string,int> blabla;
+					 string = vertices[faces[j][vert * length]] (So, the point's XYZ coordinates!!)
+					 int = j (The triangle's index)
+					 */
+					//Each face/triangle has 3 bary coords
+					//Lines:
+					//TODO finish this
+					for (int j = faces.Count - 1; j >= 0; j--)
+					{
+						if (faces[j].Length > 2)
+						{
+							IEnumerable<int> matchingVertices0 = adj[vertices[faces[j][0]]];
+							IEnumerable<int> matchingVertices1 = adj[vertices[faces[j][length]]];
+							IEnumerable<int> matchingVertices2 = adj[vertices[faces[j][2 * length]]];
+							//2 Matching points
+							//TriIndex = triangle index of the adjacent triangle
+							foreach (int triIndex in matchingVertices1)
+							{
+								if (matchingVertices0.Contains(triIndex))
+								{
+									double angleBetweenTriangles = Math.Abs(dotProcuct(faceNormals[j], faceNormals[triIndex]));
+									if (angleBetweenTriangles < threshold)
+									{
+										bary[j, 2] = angleBetweenTriangles + addTo;
+										//TODO Make this better? (Other triangle bary coords)
+										//bary[triIndex, ] = angleBetweenTriangles + addTo;
+									}
+								}
+							}
+							foreach (int triIndex in matchingVertices2)
+							{
+								if (matchingVertices1.Contains(triIndex))
+								{
+									double angleBetweenTriangles = Math.Abs(dotProcuct(faceNormals[j], faceNormals[triIndex]));
+									if (angleBetweenTriangles < threshold)
+									{
+										bary[j, 0] = angleBetweenTriangles + addTo;
+									}
+								}
+								if (matchingVertices0.Contains(triIndex))
+								{
+									double angleBetweenTriangles = Math.Abs(dotProcuct(faceNormals[j], faceNormals[triIndex]));
+									if (angleBetweenTriangles < threshold)
+									{
+										bary[j, 1] = angleBetweenTriangles + addTo;
+									}
+								}
+							}
+							//Single matching points:						}
 						if (prevJ - j > 1000)
 						{
 							Console.WriteLine("{0}% done", (1 - (double)j / faces.Count) * 100);
@@ -458,6 +481,10 @@ namespace FileTest
 					}
 
 
+
+					//Write to file
+					int boneInd = 0;
+					bool firstTime = true;
 					for (int j = 0; j < faces.Count; j++)
 					{
 						int[] currFace = faces[j];
@@ -473,14 +500,23 @@ namespace FileTest
 								image = images[texNames[currFace[0]]];
 							}
 							Console.WriteLine(image);
-							if (j == 0)
+							if (firstTime)
 							{
 								JSONFile.Write("[");
+								firstTime = false;
 							}
 							else {
 								JSONFile.Write("],\n[");
 							}
 							JSONFile.Write('"' + image + "\",");
+						}
+						else if (currFace.Length == 2)
+						{
+							//Change the bone index
+							boneInd = currFace[0];
+							//TODO
+							//http://stackoverflow.com/questions/16572362/rearrange-a-list-based-on-given-order-in-c-sharp
+							//parts[currFace[0]]
 						}
 						else
 						{
@@ -519,6 +555,7 @@ namespace FileTest
 								//}
 								//JSONFile.Write(baryString[bary[j, i]]);
 								JSONFile.Write(baryCoordsOfTri[i]);
+								JSONFile.Write("," + boneInd);
 								//Pawsome JS is perfectly capable of realizing that the trailing commas aren't part of the array!
 								JSONFile.Write(',');
 							}
@@ -527,6 +564,15 @@ namespace FileTest
 
 
 					JSONFile.Write("]];");
+					//You are going to have to reorder the parts manually
+					JSONFile.Write("\nvar bones = [");
+					for (int i = 0; i < parts.Count; i++)
+					{
+						//pitch/yaw or something else..?
+						JSONFile.Write("{name:" + parts[i] + ",index:" + i + ",pos:[0,0,0],pitch:0,yaw:0},");
+					}
+
+					JSONFile.Write("];");
 					//TODO add info about how the model is structured
 					//TODO create indices file to make finding adjacent stuff faster
 					Console.WriteLine("Vertex count: " + vertices.Count);
@@ -614,6 +660,7 @@ namespace FileTest
 
 		}
 
+		//TODO needs to be changed 
 		/// <summary>
 		/// Turns a bunch of random numbers into valid barycentric coordinates
 		/// </summary>
@@ -621,28 +668,31 @@ namespace FileTest
 		/// <param name="two"></param>
 		/// <param name="three"></param>
 		/// <returns></returns>
-		static string[] toBary(int one, int two, int three)
+		static string[] toBary(double one, double two, double three)
 		{
-			int[] bary = {
+			double[] bary = {
 			1,1,1,
 			1,1,1,
 			1,1,1};
-			if (one != 0)
+			if (one > 0)
 			{
+				bary[1] = one;
 				bary[3] = 0;
 				bary[6] = 0;
 			}
 
-			if (two != 0)
+			if (two > 0)
 			{
 				bary[1] = 0;
+				bary[4] = two;
 				bary[7] = 0;
 			}
 
-			if (three != 0)
+			if (three > 0)
 			{
 				bary[2] = 0;
 				bary[5] = 0;
+				bary[7] = three;
 			}
 			string[] baryString = new string[3];
 			for (int i = 0, c = 0; i < 9; i += 3, c++)
