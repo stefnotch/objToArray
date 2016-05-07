@@ -7,8 +7,7 @@
  * Turns an obj + mtl file into something that I can use
  *--------------------------------------------------------------
 */
-//TODO If the vertex doesn't have an adjacent vertex on any of the edges, it won't work as intended. That needs to be fixed.
-//I don't think that is an issue anymore
+
 //http://web.cse.ohio-state.edu/~hwshen/581/Site/Lab3_files/Labhelp_Obj_parser.htm
 using System;
 using System.Collections.Generic;
@@ -62,16 +61,17 @@ namespace FileTest
 					List<string> texNames = new List<string>();
 					List<int[]> faces = new List<int[]>();
 
+					List<int[]> bones = new List<int[]>();
 					List<string> parts = new List<string>();
 
 					//Does it have UVs
 					bool hasUvs = true;
-					//Length of the triangle. (3=>only vertices, 6=>vertices and uvs, 9 => vertices, uvs, and normals)
+					//Length of the triangle. (1=>only vertices, 2=>vertices and uvs, 3=>vertices, uvs, and normals)
 					int length = 0;
-
 					#region OBJ READER
 					using (StreamReader objReader = new StreamReader(fileName + ".obj"))
 					{
+						int boneIndex = 0;
 						string currentLine;
 						while ((currentLine = objReader.ReadLine()) != null)
 						{
@@ -88,6 +88,7 @@ namespace FileTest
 							else if (currentLine.StartsWith("usemtl"))
 							{
 								faces.Add(new int[] { texNames.Count });
+								bones.Add(new int[0]);//Dummy
 								texNames.Add("new" + currentLine.Substring(3));
 							}
 							else if (currentLine.StartsWith("vt"))
@@ -109,6 +110,8 @@ namespace FileTest
 							{
 								vertices.Add(currentLine.Substring(1).Trim(' ').Replace(' ', ','));
 							}
+							//TODO Magically add missing parts (Index: -1)
+							//TODO Not triangle face check
 							else if (currentLine.StartsWith("f"))
 							{
 								string[] currentFace = currentLine.Substring(1).Trim(' ').Split(' ', '/');
@@ -123,7 +126,7 @@ namespace FileTest
 										printError("Inconsistent face lengths: " + currentLine + length);
 									}
 								}
-								//The array that will get added to the faces
+								//The array that will get added to the faces (+1 for the bone index)
 								int[] addToFaces = new int[currentFace.Length];
 								//Loop over each index
 								for (int i = 0; i < currentFace.Length; i++)
@@ -137,10 +140,13 @@ namespace FileTest
 									{
 										printError("Inconsistent uvs. The model sometimes has them, sometimes it doesn't!");
 									}
-									addToFaces[i] = Int32.Parse(currentFace[i]) - 1;
-								}
 
+									//OBJ indices start at one
+									addToFaces[i] = Int32.Parse(currentFace[i]) - 1;
+
+								}
 								faces.Add(addToFaces);
+								bones.Add(new int[3] { boneIndex, boneIndex, boneIndex });
 							}
 							else if (currentLine[0] == 'g') //obj group
 							{
@@ -154,11 +160,11 @@ namespace FileTest
 								int groupIndex = parts.IndexOf(groupName);
 								if (groupIndex > -1)
 								{
-									faces.Add(new int[] { groupIndex, 0 });
+									boneIndex = groupIndex;
 								}
 								else
 								{
-									faces.Add(new int[] { parts.Count, 0 });
+									boneIndex = parts.Count;
 									parts.Add(groupName);
 								}
 
@@ -205,13 +211,11 @@ namespace FileTest
 					#endregion
 
 					//TODO Fix the empty newmtl
-
 					//Divide the length by 3
 					length = length / 3;
-					//I hope this works
-					double[][] faceNormals = new double[faces.Count][];
-					JSONFile.Write("var model = [");
+
 					#region Face normals
+					double[][] faceNormals = new double[faces.Count][];
 					for (int j = 0; j < faces.Count; j++)
 					{
 						if (faces[j].Length > 2)
@@ -226,265 +230,122 @@ namespace FileTest
 	  Ny = (Vz * Wx)−(Vx * Wz)
 	  Nz = (Vx * Wy)−(Vy * Wx)
 */
-							var Vx = verts[3] - verts[0];
-							var Vy = verts[4] - verts[1];
-							var Vz = verts[5] - verts[2];
+							double Vx = verts[3] - verts[0];
+							double Vy = verts[4] - verts[1];
+							double Vz = verts[5] - verts[2];
 
-							var Wx = verts[6] - verts[0];
-							var Wy = verts[7] - verts[1];
-							var Wz = verts[8] - verts[2];
+							double Wx = verts[6] - verts[0];
+							double Wy = verts[7] - verts[1];
+							double Wz = verts[8] - verts[2];
 
 							//Face Normals
-							var Nx = (Vy * Wz) - (Vz * Wy);
-							var Ny = (Vz * Wx) - (Vx * Wz);
-							var Nz = (Vx * Wy) - (Vy * Wx);
+							double Nx = (Vy * Wz) - (Vz * Wy);
+							double Ny = (Vz * Wx) - (Vx * Wz);
+							double Nz = (Vx * Wy) - (Vy * Wx);
 							//Normals
 							faceNormals[j] = normalize(Nx, Ny, Nz);
 						}
 					}
-					/*
-					 function calculateExtendersAndLines() {
-  const off = 0.05;
-  const threshold = 0.7;
-  var faceNormals = [];
-  var lines = [];
-  if (model["lines"] == undefined) {
-    //Face normals
-    //Loop over all triangles
-    for (var tri = 0; tri < model["vertices"].length; tri += 9) {
-      /*
-      The cross product of two sides of the triangle equals the surface normal. 
-      So, if V = P2 - P1 and W = P3 - P1, and N is the surface normal, then:
-      Nx=(Vy*Wz)−(Vz*Wy)
-      Ny=(Vz*Wx)−(Vx*Wz)
-      Nz=(Vx*Wy)−(Vy*Wx)
-
-					var Vx = model["vertices"][tri + 3] - model["vertices"][tri];
-					var Vy = model["vertices"][tri + 4] - model["vertices"][tri + 1];
-					var Vz = model["vertices"][tri + 5] - model["vertices"][tri + 2];
-
-					var Wx = model["vertices"][tri + 6] - model["vertices"][tri];
-					var Wy = model["vertices"][tri + 7] - model["vertices"][tri + 1];
-					var Wz = model["vertices"][tri + 8] - model["vertices"][tri + 2];
-
-					//Face Normals
-					var Nx = (Vy * Wz) - (Vz * Wy);
-					var Ny = (Vz * Wx) - (Vx * Wz);
-					var Nz = (Vx * Wy) - (Vy * Wx);
-					//Normals
-					faceNormals.push(MatMath.normalize(Nx, Ny, Nz));
-
-					//MatMath.dotProcuct()
-				}
-
-				//Flipped triangles
-				for (var tri = 0; tri < model["vertices"].length; tri += 9)
-				{
-					var adjTriangles = 0;
-					for (var triOther = tri + 9; triOther < model["vertices"].length; triOther += 9)
-					{
-						var touching = false;
-						//For each vertex in that triangle
-						otherVert:
-						for (var vert = 0; vert < 9; vert += 3)
-						{
-							for (var vertOther = 0; vertOther < 6; vertOther += 3)
-							{
-								//Check if they are the same point
-								if (model.vertices[tri + vert] == model.vertices[triOther + vertOther] &&
-								  model.vertices[tri + vert + 1] == model.vertices[triOther + vertOther + 1] &&
-								  model.vertices[tri + vert + 2] == model.vertices[triOther + vertOther + 2])
-								{
-									//One point matches
-									//Check if another point matches and make 2 triangles opposite winding orders!
-									if ((model.vertices[tri + (vert + 3) % 9] == model.vertices[triOther + (vertOther + 3) % 9] &&
-										model.vertices[tri + (vert + 1 + 3) % 9] == model.vertices[triOther + (vertOther + 1 + 3) % 9] &&
-										model.vertices[tri + (vert + 2 + 3) % 9] == model.vertices[triOther + (vertOther + 2 + 3) % 9]) ||
-
-									  (model.vertices[tri + (vert + 3) % 9] == model.vertices[triOther + (vertOther + 6) % 9] &&
-										model.vertices[tri + (vert + 1 + 3) % 9] == model.vertices[triOther + (vertOther + 1 + 6) % 9] &&
-										model.vertices[tri + (vert + 2 + 3) % 9] == model.vertices[triOther + (vertOther + 2 + 6) % 9]))
-									{
-										if (Math.abs(MatMath.dotProcuct(faceNormals[tri / 9], faceNormals[triOther / 9])) < threshold)
-										{
-
-											//Subtract face normals, make them larger!
-											//Extenders merge
-
-
-											lines.push(model.vertices[tri + vert] + faceNormals[triOther / 9][0] * off,
-											  model.vertices[tri + vert + 1] + faceNormals[triOther / 9][1] * off,
-											  model.vertices[tri + vert + 2] + faceNormals[triOther / 9][2] * off);
-											lines.push(model.vertices[tri + (vert + 3) % 9] + faceNormals[tri / 9][0] * off,
-											  model.vertices[tri + (vert + 1 + 3) % 9] + faceNormals[tri / 9][1] * off,
-											  model.vertices[tri + (vert + 2 + 3) % 9] + faceNormals[tri / 9][2] * off);
-											lines.push(model.vertices[tri + (vert + 3) % 9] + faceNormals[triOther / 9][0] * off,
-											  model.vertices[tri + (vert + 1 + 3) % 9] + faceNormals[triOther / 9][1] * off,
-											  model.vertices[tri + (vert + 2 + 3) % 9] + faceNormals[triOther / 9][2] * off);
-
-											lines.push(model.vertices[tri + (vert + 3) % 9] + faceNormals[tri / 9][0] * off,
-											  model.vertices[tri + (vert + 1 + 3) % 9] + faceNormals[tri / 9][1] * off,
-											  model.vertices[tri + (vert + 2 + 3) % 9] + faceNormals[tri / 9][2] * off);
-											lines.push(model.vertices[tri + vert] + faceNormals[triOther / 9][0] * off,
-											  model.vertices[tri + vert + 1] + faceNormals[triOther / 9][1] * off,
-											  model.vertices[tri + vert + 2] + faceNormals[triOther / 9][2] * off);
-											lines.push(model.vertices[tri + vert] + faceNormals[tri / 9][0] * off,
-											  model.vertices[tri + vert + 1] + faceNormals[tri / 9][1] * off,
-											  model.vertices[tri + vert + 2] + faceNormals[tri / 9][2] * off);
-
-											touching = true;
-										}
-										break otherVert;
-									}
-									if ((model.vertices[tri + (vert + 6) % 9] == model.vertices[triOther + (vertOther + 3) % 9] &&
-										model.vertices[tri + (vert + 1 + 6) % 9] == model.vertices[triOther + (vertOther + 1 + 3) % 9] &&
-										model.vertices[tri + (vert + 2 + 6) % 9] == model.vertices[triOther + (vertOther + 2 + 3) % 9]) ||
-
-									  (model.vertices[tri + (vert + 6) % 9] == model.vertices[triOther + (vertOther + 6) % 9] &&
-										model.vertices[tri + (vert + 1 + 6) % 9] == model.vertices[triOther + (vertOther + 1 + 6) % 9] &&
-										model.vertices[tri + (vert + 2 + 6) % 9] == model.vertices[triOther + (vertOther + 2 + 6) % 9]))
-									{
-
-										if (Math.abs(MatMath.dotProcuct(faceNormals[tri / 9], faceNormals[triOther / 9])) < threshold)
-										{
-
-											//Line triangle one
-											lines.push(model.vertices[tri + vert] + faceNormals[tri / 9][0] * off,
-											  model.vertices[tri + vert + 1] + faceNormals[tri / 9][1] * off,
-											  model.vertices[tri + vert + 2] + faceNormals[tri / 9][2] * off);
-
-											lines.push(model.vertices[tri + (vert + 6) % 9] + faceNormals[triOther / 9][0] * off,
-											  model.vertices[tri + (vert + 1 + 6) % 9] + faceNormals[triOther / 9][1] * off,
-											  model.vertices[tri + (vert + 2 + 6) % 9] + faceNormals[triOther / 9][2] * off);
-
-											lines.push(model.vertices[tri + (vert + 6) % 9] + faceNormals[tri / 9][0] * off,
-											  model.vertices[tri + (vert + 1 + 6) % 9] + faceNormals[tri / 9][1] * off,
-											  model.vertices[tri + (vert + 2 + 6) % 9] + faceNormals[tri / 9][2] * off);
-
-
-
-											//Line triangle two
-											lines.push(model.vertices[tri + (vert + 6) % 9] + faceNormals[triOther / 9][0] * off,
-											  model.vertices[tri + (vert + 1 + 6) % 9] + faceNormals[triOther / 9][1] * off,
-											  model.vertices[tri + (vert + 2 + 6) % 9] + faceNormals[triOther / 9][2] * off);
-
-											lines.push(model.vertices[tri + vert] + faceNormals[tri / 9][0] * off,
-											  model.vertices[tri + vert + 1] + faceNormals[tri / 9][1] * off,
-											  model.vertices[tri + vert + 2] + faceNormals[tri / 9][2] * off);
-
-											lines.push(model.vertices[tri + vert] + faceNormals[triOther / 9][0] * off,
-											  model.vertices[tri + vert + 1] + faceNormals[triOther / 9][1] * off,
-											  model.vertices[tri + vert + 2] + faceNormals[triOther / 9][2] * off);
-
-
-											touching = true;
-										}
-
-									}
-									break otherVert;
-								}
-							}
-						}
-						if (touching)
-						{
-							adjTriangles++;
-							if (adjTriangles == 3)
-							{
-								break;
-							}
-						}
-					}
-
-				}
-				model["vertices"].push.apply(model.vertices, lines);
-				model["normals"].push.apply(model.normals, new Array(lines.length).fill(0));
-				model["uvs"].push.apply(model.uvs, new Array(lines.length).fill(-1));
-			}
-		}
-					 */
 					#endregion
 
-
-					//Speed this up!!
-					var toLookup = new List<KeyValuePair<string, int>>();
+					#region Bary coords and bones
+					var toLookup = new List<KeyValuePair<string, triAndVertIndex>>();
 					for (int j = faces.Count - 1; j >= 0; j--)
 					{
 						if (faces[j].Length > 2)
 						{
 							for (var vert = 0; vert < 3; vert++)
 							{
-								toLookup.Add(new KeyValuePair<string, int>(vertices[faces[j][vert * length]], j));
+								toLookup.Add(new KeyValuePair<string, triAndVertIndex>(vertices[faces[j][vert * length]], new triAndVertIndex { triIndex = j, vertIndex = vert }));
 							}
 						}
 					}
-					//TODO [][] is faster, not anymore??
 					double[,] bary = new double[faces.Count, 3]; //Filled with: default( int )
 					const double threshold = 0.6;
 					const double addTo = 1 - threshold;
-					int prevJ = faces.Count;
-					Lookup<string, int> adj = (Lookup<string, int>)toLookup.ToLookup((item) => item.Key, (item) => item.Value);
-					/*
-					 Lookup<string,int> blabla;
-					 string = vertices[faces[j][vert * length]] (So, the point's XYZ coordinates!!)
-					 int = j (The triangle's index)
-					 */
+					Lookup<string, triAndVertIndex> adj = (Lookup<string, triAndVertIndex>)toLookup.ToLookup((item) => item.Key, (item) => item.Value);
 					//Each face/triangle has 3 bary coords
 					//Lines:
-					//TODO finish this
 					for (int j = faces.Count - 1; j >= 0; j--)
 					{
 						if (faces[j].Length > 2)
 						{
-							IEnumerable<int> matchingVertices0 = adj[vertices[faces[j][0]]];
-							IEnumerable<int> matchingVertices1 = adj[vertices[faces[j][length]]];
-							IEnumerable<int> matchingVertices2 = adj[vertices[faces[j][2 * length]]];
+							IEnumerable<triAndVertIndex> matchingVertices0 = adj[vertices[faces[j][0]]];
+							IEnumerable<triAndVertIndex> matchingVertices1 = adj[vertices[faces[j][length]]];
+							IEnumerable<triAndVertIndex> matchingVertices2 = adj[vertices[faces[j][2 * length]]];
 							//2 Matching points
 							//TriIndex = triangle index of the adjacent triangle
-							foreach (int triIndex in matchingVertices1)
+							foreach (triAndVertIndex index in matchingVertices0)
 							{
-								if (matchingVertices0.Contains(triIndex))
+								//Lesser faces will expand
+								//Oh, yeah! It's working! (Magic!)
+								if (bones[j][0] != bones[index.triIndex][index.vertIndex])
 								{
-									double angleBetweenTriangles = Math.Abs(dotProcuct(faceNormals[j], faceNormals[triIndex]));
-									if (angleBetweenTriangles < threshold)
+									bones[j][0] = -1;
+								}
+								foreach(triAndVertIndex otherIndex in matchingVertices1)
+								{
+									if(otherIndex.triIndex == index.triIndex)
 									{
-										bary[j, 2] = angleBetweenTriangles + addTo;
-										//TODO Make this better? (Other triangle bary coords)
-										//bary[triIndex, ] = angleBetweenTriangles + addTo;
+										double angleBetweenTriangles = Math.Abs(dotProcuct(faceNormals[j], faceNormals[otherIndex.triIndex]));
+										if (angleBetweenTriangles < threshold)
+										{
+											bary[j, 2] = 1;// angleBetweenTriangles + addTo;
+										}
+										break;
 									}
 								}
 							}
-							foreach (int triIndex in matchingVertices2)
+							foreach (triAndVertIndex index in matchingVertices1)
 							{
-								if (matchingVertices1.Contains(triIndex))
+								//TODO single matching point
+								//Lesser faces will expand
+								if (bones[j][1] != bones[index.triIndex][index.vertIndex])
 								{
-									double angleBetweenTriangles = Math.Abs(dotProcuct(faceNormals[j], faceNormals[triIndex]));
-									if (angleBetweenTriangles < threshold)
-									{
-										bary[j, 0] = angleBetweenTriangles + addTo;
-									}
+									bones[j][1] = -1;
 								}
-								if (matchingVertices0.Contains(triIndex))
+								foreach (triAndVertIndex otherIndex in matchingVertices2)
 								{
-									double angleBetweenTriangles = Math.Abs(dotProcuct(faceNormals[j], faceNormals[triIndex]));
-									if (angleBetweenTriangles < threshold)
+									if (otherIndex.triIndex == index.triIndex)
 									{
-										bary[j, 1] = angleBetweenTriangles + addTo;
+										double angleBetweenTriangles = Math.Abs(dotProcuct(faceNormals[j], faceNormals[otherIndex.triIndex]));
+										if (angleBetweenTriangles < threshold)
+										{
+											bary[j, 0] = 1;// TODO angleBetweenTriangles + addTo;
+										}
+										break;
 									}
 								}
 							}
-						}
-						//Single matching points:						
-						if (prevJ - j > 1000)
-						{
-							Console.WriteLine("{0}% done", (1 - (double)j / faces.Count) * 100);
-							prevJ = j;
-						}
-					}
+							foreach (triAndVertIndex index in matchingVertices2)
+							{
+								//Lesser faces will expand
+								if (bones[j][2] != bones[index.triIndex][index.vertIndex])
+								{
+									bones[j][2] = -1;
+								}
+								foreach (triAndVertIndex otherIndex in matchingVertices0)
+								{
+									if (otherIndex.triIndex == index.triIndex)
+									{
+										double angleBetweenTriangles = Math.Abs(dotProcuct(faceNormals[j], faceNormals[otherIndex.triIndex]));
+										if (angleBetweenTriangles < threshold)
+										{
+											bary[j, 1] = 1;// TODO angleBetweenTriangles + addTo;
+										}
+										break;
+									}
+								}
+							}
 
+						}
+						//TODO Single matching points:						
+					}
+					#endregion
 
 
 					//Write to file
-					int boneInd = 0;
+					JSONFile.Write("model = [");
 					bool firstTime = true;
 					for (int j = 0; j < faces.Count; j++)
 					{
@@ -511,52 +372,37 @@ namespace FileTest
 							}
 							JSONFile.Write('"' + image + "\",");
 						}
-						else if (currFace.Length == 2)
-						{
-							//Change the bone index
-							boneInd = currFace[0];
-							//TODO
-							//http://stackoverflow.com/questions/16572362/rearrange-a-list-based-on-given-order-in-c-sharp
-							//parts[currFace[0]]
-						}
 						else
 						{
 							string[] baryCoordsOfTri = toBary(bary[j, 0], bary[j, 1], bary[j, 2]);
+							int prevBone = bones[j][0];
 							//Triangle
 							for (int i = 0; i < 3; i++)
 							{
-								JSONFile.Write(vertices[currFace[i * 3]]);
+								JSONFile.Write(vertices[currFace[i * length]]);
 
 
 								if (length == 2)
 								{
-									JSONFile.Write("," + uvs[currFace[i * 3 + 1]]);
+									JSONFile.Write("," + uvs[currFace[i * length + 1]]);
 								}
 								else if (length == 3)
 								{
 									if (hasUvs)
 									{
-										JSONFile.Write("," + uvs[currFace[i * 3 + 1]]);
+										JSONFile.Write("," + uvs[currFace[i * length + 1]]);
 									}
-									JSONFile.Write("," + normals[currFace[i * 3 + 2]]);
+									JSONFile.Write("," + normals[currFace[i * length + 2]]);
 								}
-								//TODO Find adjacent faces using indices and a for loop and change this:
-								//TODO Fix this
-								//If it is a !0 value, the line has to be drawn, otherwise hidden
-								//IF (bary[j, i] == 0){hideLine();}
-								//if (bary[j, i] == 0)
-								//{
-								//	printError("Null");
-								//	JSONFile.Write(baryString[bary[j, i]]);
-								//baryString[i+1];
-								//}
-								//else
-								//{
-								//	JSONFile.Write(baryString[i + 1]);
-								//}
-								//JSONFile.Write(baryString[bary[j, i]]);
+
 								JSONFile.Write(baryCoordsOfTri[i]);
-								JSONFile.Write("," + boneInd);
+								if (prevBone != bones[j][i])
+								{
+									printError("J: " + j + " prevBon: " + prevBone + " dfgds: " + bones[j][i]);
+									prevBone = bones[j][i];
+								}
+								JSONFile.Write("," + bones[j][i]);
+
 								//Pawsome JS is perfectly capable of realizing that the trailing commas aren't part of the array!
 								JSONFile.Write(',');
 							}
@@ -565,27 +411,34 @@ namespace FileTest
 
 
 					JSONFile.Write("]];");
+					JSONFile.Close();
+
+
+					StreamWriter bonesFile = File.CreateText("./obj/outputBones.txt");
 					//You are going to have to reorder the parts manually
-					JSONFile.Write("\nvar bones = [");
+					bonesFile.Write("\nbones = [");
 					for (int i = 0; i < parts.Count; i++)
 					{
 						//pitch/yaw or something else..?
-						JSONFile.Write("{name:" + parts[i] + ",index:" + i + ",pos:[0,0,0],pitch:0,yaw:0},");
+						// ",pos:[0,0,0],pitch:0,yaw:0},"
+						bonesFile.Write("{name:\"" + parts[i] + "\",index:" + i + "},");
 					}
 
-					JSONFile.Write("];");
+					bonesFile.Write("];");
+					bonesFile.Close();
 					//TODO add info about how the model is structured
-					//TODO create indices file to make finding adjacent stuff faster
 					Console.WriteLine("Vertex count: " + vertices.Count);
 					Console.WriteLine("UVs count: " + uvs.Count);
 					Console.WriteLine("Normals count: " + normals.Count);
 					Console.WriteLine("Face count: " + faces.Count);
 					Console.WriteLine("Length: " + length);
 
-					JSONFile.Close();
+
 
 					try { File.Delete("./obj/output.js"); } catch (Exception e) { };
+					try { File.Delete("./obj/outputBones.js"); } catch (Exception e) { };
 					File.Move("./obj/output.txt", Path.ChangeExtension("./obj/output.txt", ".js"));
+					File.Move("./obj/outputBones.txt", Path.ChangeExtension("./obj/outputBones.txt", ".js"));
 				}
 				else
 				{
@@ -633,7 +486,7 @@ namespace FileTest
 
 		static double[] normalize(double x, double y, double z)
 		{
-			var length = Math.Sqrt(x * x + y * y + z * z);
+			double length = Math.Sqrt(x * x + y * y + z * z);
 			// make sure we don't divide by 0.
 			if (length > 0.00001)
 			{
@@ -661,7 +514,7 @@ namespace FileTest
 
 		}
 
-		//TODO needs to be changed 
+		//TODO needs to be changed to account for points 
 		/// <summary>
 		/// Turns a bunch of random numbers into valid barycentric coordinates
 		/// </summary>
@@ -703,6 +556,13 @@ namespace FileTest
 			return baryString;
 		}
 	}
+
+	struct triAndVertIndex
+	{
+		public int triIndex;
+		public int vertIndex;
+	}
+
 }
 
 
