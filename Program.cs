@@ -18,6 +18,8 @@ namespace FileTest
 {
 	class Program
 	{
+		static List<int[]> bones;
+		static List<string> boneNames;
 		public static void Main(string[] args)
 		{
 			//Dir
@@ -61,13 +63,15 @@ namespace FileTest
 					List<string> texNames = new List<string>();
 					List<int[]> faces = new List<int[]>();
 
-					List<int[]> bones = new List<int[]>();
-					List<string> parts = new List<string>();
-
+					//Bone ID (Integers that store the bone's ID for each vertex)
+					bones = new List<int[]>();
+					boneNames = new List<string>();
 					//Does it have UVs
 					bool hasUvs = true;
 					//Length of the triangle. (1=>only vertices, 2=>vertices and uvs, 3=>vertices, uvs, and normals)
 					int length = 0;
+					//To check if the group has any faces at all
+					int groupFaceIndex = -1;
 					#region OBJ READER
 					using (StreamReader objReader = new StreamReader(fileName + ".obj"))
 					{
@@ -148,8 +152,14 @@ namespace FileTest
 								faces.Add(addToFaces);
 								bones.Add(new int[3] { boneIndex, boneIndex, boneIndex });
 							}
-							else if (currentLine[0] == 'g') //obj group
+							else if (currentLine[0] == 'g') //New obj group
 							{
+								//If the previous group didn't have any new things
+								if (faces.Count == groupFaceIndex)
+								{
+									boneNames.RemoveAt(boneNames.Count - 1);
+								}
+
 								string groupName = currentLine.Substring(1).Trim(' ').Replace(' ', ',');
 								if (groupName == "(null)")
 								{
@@ -157,16 +167,18 @@ namespace FileTest
 									printError("Everything needs to be part of a vertex group, non-fatal error");
 								}
 								//Bone, another attribute for all vertices!
-								int groupIndex = parts.IndexOf(groupName);
+								int groupIndex = boneNames.IndexOf(groupName);
 								if (groupIndex > -1)
 								{
 									boneIndex = groupIndex;
 								}
 								else
 								{
-									boneIndex = parts.Count;
-									parts.Add(groupName);
+									boneIndex = boneNames.Count;
+									boneNames.Add(groupName);
 								}
+								//New group discovered at face number X
+								groupFaceIndex = faces.Count;
 
 							}
 							else
@@ -261,7 +273,7 @@ namespace FileTest
 						}
 					}
 					double[,] bary = new double[faces.Count, 3]; //Filled with: default( int )
-					const double threshold = 0.6;
+					const double threshold = 0.55;
 					const double addTo = 1 - threshold;
 					Lookup<string, triAndVertIndex> adj = (Lookup<string, triAndVertIndex>)toLookup.ToLookup((item) => item.Key, (item) => item.Value);
 					//Each face/triangle has 3 bary coords
@@ -275,17 +287,16 @@ namespace FileTest
 							IEnumerable<triAndVertIndex> matchingVertices2 = adj[vertices[faces[j][2 * length]]];
 							//2 Matching points
 							//TriIndex = triangle index of the adjacent triangle
+							bool noAdjVerts = true;
 							foreach (triAndVertIndex index in matchingVertices0)
 							{
-								//Lesser faces will expand
+								noAdjVerts = false;
 								//Oh, yeah! It's working! (Magic!)
-								if (bones[j][0] != bones[index.triIndex][index.vertIndex])
+								singleMatchingVertex(0, j, index);
+
+								foreach (triAndVertIndex otherIndex in matchingVertices1)
 								{
-									bones[j][0] = -1;
-								}
-								foreach(triAndVertIndex otherIndex in matchingVertices1)
-								{
-									if(otherIndex.triIndex == index.triIndex)
+									if (otherIndex.triIndex == index.triIndex)
 									{
 										double angleBetweenTriangles = Math.Abs(dotProcuct(faceNormals[j], faceNormals[otherIndex.triIndex]));
 										if (angleBetweenTriangles < threshold)
@@ -296,14 +307,17 @@ namespace FileTest
 									}
 								}
 							}
+							if (noAdjVerts)
+							{
+								bary[j, 1] = 1;
+								bary[j, 2] = 1;
+							}
+							noAdjVerts = true;
 							foreach (triAndVertIndex index in matchingVertices1)
 							{
-								//TODO single matching point
-								//Lesser faces will expand
-								if (bones[j][1] != bones[index.triIndex][index.vertIndex])
-								{
-									bones[j][1] = -1;
-								}
+								noAdjVerts = false;
+								singleMatchingVertex(1, j, index);
+
 								foreach (triAndVertIndex otherIndex in matchingVertices2)
 								{
 									if (otherIndex.triIndex == index.triIndex)
@@ -317,13 +331,16 @@ namespace FileTest
 									}
 								}
 							}
+							if (noAdjVerts)
+							{
+								bary[j, 0] = 1;
+								bary[j, 2] = 1;
+							}
+							noAdjVerts = true;
 							foreach (triAndVertIndex index in matchingVertices2)
 							{
-								//Lesser faces will expand
-								if (bones[j][2] != bones[index.triIndex][index.vertIndex])
-								{
-									bones[j][2] = -1;
-								}
+								noAdjVerts = false;
+								singleMatchingVertex(2, j, index);
 								foreach (triAndVertIndex otherIndex in matchingVertices0)
 								{
 									if (otherIndex.triIndex == index.triIndex)
@@ -336,6 +353,11 @@ namespace FileTest
 										break;
 									}
 								}
+							}
+							if (noAdjVerts)
+							{
+								bary[j, 0] = 1;
+								bary[j, 1] = 1;
 							}
 
 						}
@@ -375,7 +397,6 @@ namespace FileTest
 						else
 						{
 							string[] baryCoordsOfTri = toBary(bary[j, 0], bary[j, 1], bary[j, 2]);
-							int prevBone = bones[j][0];
 							//Triangle
 							for (int i = 0; i < 3; i++)
 							{
@@ -396,11 +417,6 @@ namespace FileTest
 								}
 
 								JSONFile.Write(baryCoordsOfTri[i]);
-								if (prevBone != bones[j][i])
-								{
-									printError("J: " + j + " prevBon: " + prevBone + " dfgds: " + bones[j][i]);
-									prevBone = bones[j][i];
-								}
 								JSONFile.Write("," + bones[j][i]);
 
 								//Pawsome JS is perfectly capable of realizing that the trailing commas aren't part of the array!
@@ -417,11 +433,11 @@ namespace FileTest
 					StreamWriter bonesFile = File.CreateText("./obj/outputBones.txt");
 					//You are going to have to reorder the parts manually
 					bonesFile.Write("\nbones = [");
-					for (int i = 0; i < parts.Count; i++)
+					for (int i = 0; i < boneNames.Count; i++)
 					{
 						//pitch/yaw or something else..?
 						// ",pos:[0,0,0],pitch:0,yaw:0},"
-						bonesFile.Write("{name:\"" + parts[i] + "\",index:" + i + "},");
+						bonesFile.WriteLine("{name:\"" + boneNames[i] + "\",index:" + i + ",parent:-1},");
 					}
 
 					bonesFile.Write("];");
@@ -514,7 +530,7 @@ namespace FileTest
 
 		}
 
-		//TODO needs to be changed to account for points 
+		//TODO needs to be changed to account for single points 
 		/// <summary>
 		/// Turns a bunch of random numbers into valid barycentric coordinates
 		/// </summary>
@@ -555,8 +571,28 @@ namespace FileTest
 			}
 			return baryString;
 		}
-	}
 
+		static void singleMatchingVertex(int vertexIndex, int j, triAndVertIndex otherIndex)
+		{
+			if (bones[j][vertexIndex] != bones[otherIndex.triIndex][otherIndex.vertIndex])
+			{
+				char boneStartLetter = boneNames[bones[j][vertexIndex]][0];
+				if (boneStartLetter == 'e')
+				{
+					bones[otherIndex.triIndex][otherIndex.vertIndex] = bones[j][0];
+				}
+				else if (boneStartLetter == 'c')
+				{
+					bones[j][vertexIndex] = bones[otherIndex.triIndex][otherIndex.vertIndex];
+				}
+				//Lesser faces will contract
+				else if (bones[j][vertexIndex] < bones[otherIndex.triIndex][otherIndex.vertIndex])
+				{
+					bones[j][vertexIndex] = bones[otherIndex.triIndex][otherIndex.vertIndex];
+				}
+			}
+		}
+	}
 	struct triAndVertIndex
 	{
 		public int triIndex;
