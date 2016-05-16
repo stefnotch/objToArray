@@ -9,8 +9,11 @@
 */
 
 //http://web.cse.ohio-state.edu/~hwshen/581/Site/Lab3_files/Labhelp_Obj_parser.htm
+using Assimp;
+using Assimp.Configs;
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 
@@ -18,449 +21,35 @@ namespace FileTest
 {
 	class Program
 	{
+		/// <summary>
+		/// Vertices, 1 element --> new material/texture INT TEXTURECOUNT = 0; for the for loop
+		/// </summary>
+		static List<Vector3D[]> vertices = new List<Vector3D[]>();
+		static List<Vector3D[]> uvs = new List<Vector3D[]>();
+		static List<Vector3D[]> normals = new List<Vector3D[]>();
+		/// <summary>
+		/// Texture names, if the vertices have only 1 element, a new texture will be used
+		/// </summary>
+		static List<string> texNames = new List<string>();
+		/// <summary>
+		/// Face normals, crease threshold: 134.43
+		/// </summary>
+		static List<Vector3D> faceNormals;
+
+		static List<KeyValuePair<Vector3D, triAndVertIndex>> toLookup;
+		//Vector3D implements GetHashCode
+		static Lookup<Vector3D, triAndVertIndex> adjVert;
+		//Each vertex has a bone
+		//Bone ID (Integers that store the bone's ID for each vertex)
 		static List<int[]> bones;
 		static List<string> boneNames;
+		static Scene scene;
 		public static void Main(string[] args)
 		{
 			//Dir
 			if (Directory.Exists("./obj"))
 			{
 				Console.WriteLine("Directory Found");
-
-				//File Input
-				string fileName = "./obj/" + getUserInput("OBJ / MTL file name");
-
-				if (fileName == "./obj/")
-				{
-					string[] possibleFiles = Directory.GetFiles("./obj");
-					foreach (string currFileName in possibleFiles)
-					{
-						if (currFileName.EndsWith(".obj") && File.Exists(currFileName.Replace(".obj", ".mtl")))
-						{
-							fileName = currFileName;
-							break;
-						}
-					}
-				}
-				fileName = fileName.Replace(".mtl", "").Replace(".obj", "");
-				//If it exists, read it
-				if (File.Exists(fileName + ".obj") && File.Exists(fileName + ".mtl"))
-				{
-					Console.WriteLine("Files found, starting to read them");
-
-					try { File.Delete("./obj/output.txt"); }
-					catch (Exception e)
-					{
-						printError("No file to delete, ignore this error" + e);
-					}
-					//Create the output file
-					StreamWriter JSONFile = File.CreateText("./obj/output.txt");
-
-					List<string> vertices = new List<string>();
-					List<string> uvs = new List<string>();
-					List<string> normals = new List<string>();
-
-					List<string> texNames = new List<string>();
-					List<int[]> faces = new List<int[]>();
-
-					//Bone ID (Integers that store the bone's ID for each vertex)
-					bones = new List<int[]>();
-					boneNames = new List<string>();
-					//Does it have UVs
-					bool hasUvs = true;
-					//Length of the triangle. (1=>only vertices, 2=>vertices and uvs, 3=>vertices, uvs, and normals)
-					int length = 0;
-					//To check if the group has any faces at all
-					int groupFaceIndex = -1;
-					#region OBJ READER
-					using (StreamReader objReader = new StreamReader(fileName + ".obj"))
-					{
-						int boneIndex = 0;
-						string currentLine;
-						while ((currentLine = objReader.ReadLine()) != null)
-						{
-							//Just making it a bit foolproof
-							currentLine = currentLine.Trim();
-							if (currentLine.Length == 0)
-							{
-								//printError("Line length = 0");
-							}
-							else if (currentLine[0] == '#' || currentLine[0] == 's' || currentLine[0] == 'o' || currentLine.StartsWith("mtllib"))
-							{
-								//Do nothing
-							}
-							else if (currentLine.StartsWith("usemtl"))
-							{
-								faces.Add(new int[] { texNames.Count });
-								bones.Add(new int[0]);//Dummy
-								texNames.Add("new" + currentLine.Substring(3));
-							}
-							else if (currentLine.StartsWith("vt"))
-							{
-								string[] uv = currentLine.Substring(2).Trim(' ').Split(' ');
-								//Flip the y coordinate of the UV
-								if (uv.Length > 2)
-								{
-									printError("Too long UVs: " + currentLine);
-								}
-								uv[1] = (1 - Double.Parse(uv[1])).ToString();
-								uvs.Add(String.Join(",", uv));
-							}
-							else if (currentLine.StartsWith("vn"))
-							{
-								normals.Add(currentLine.Substring(2).Trim(' ').Replace(' ', ','));
-							}
-							else if (currentLine.StartsWith("v"))
-							{
-								vertices.Add(currentLine.Substring(1).Trim(' ').Replace(' ', ','));
-							}
-							//TODO Magically add missing parts (Index: -1)
-							//TODO Not triangle face check
-							else if (currentLine.StartsWith("f"))
-							{
-								string[] currentFace = currentLine.Substring(1).Trim(' ').Split(' ', '/');
-								if (currentFace.Length != length)
-								{
-									if (length == 0)
-									{
-										length = currentFace.Length;
-									}
-									else
-									{
-										printError("Inconsistent face lengths: " + currentLine + length);
-									}
-								}
-								//The array that will get added to the faces (+1 for the bone index)
-								int[] addToFaces = new int[currentFace.Length];
-								//Loop over each index
-								for (int i = 0; i < currentFace.Length; i++)
-								{
-									//If it doesn't have any UVs..
-									if (currentFace.Length == 9 && i % 3 == 1 && currentFace[i].Length == 0)
-									{
-										hasUvs = false;
-									}
-									else if (!hasUvs)
-									{
-										printError("Inconsistent uvs. The model sometimes has them, sometimes it doesn't!");
-									}
-
-									//OBJ indices start at one
-									addToFaces[i] = Int32.Parse(currentFace[i]) - 1;
-
-								}
-								faces.Add(addToFaces);
-								bones.Add(new int[3] { boneIndex, boneIndex, boneIndex });
-							}
-							else if (currentLine[0] == 'g') //New obj group
-							{
-								//If the previous group didn't have any new things
-								if (faces.Count == groupFaceIndex)
-								{
-									boneNames.RemoveAt(boneNames.Count - 1);
-								}
-
-								string groupName = currentLine.Substring(1).Trim(' ').Replace(' ', ',');
-								if (groupName == "(null)")
-								{
-									groupName = "notYetDefined";
-									printError("Everything needs to be part of a vertex group, non-fatal error");
-								}
-								//Bone, another attribute for all vertices!
-								int groupIndex = boneNames.IndexOf(groupName);
-								if (groupIndex > -1)
-								{
-									boneIndex = groupIndex;
-								}
-								else
-								{
-									boneIndex = boneNames.Count;
-									boneNames.Add(groupName);
-								}
-								//New group discovered at face number X
-								groupFaceIndex = faces.Count;
-
-							}
-							else
-							{
-								Console.WriteLine(currentLine);
-								System.Threading.Thread.Sleep(500);
-							}
-						}
-					}
-					#endregion
-					#region MTL READER
-					Console.WriteLine("MTL: ");
-					Dictionary<string, string> images = new Dictionary<string, string>();
-					using (StreamReader mtlReader = new StreamReader(fileName + ".mtl"))
-					{
-						//Read the .mtl file
-						string currentLine;
-						string currMTL = "nonexistent";
-						while ((currentLine = mtlReader.ReadLine()) != null)
-						{
-							Console.WriteLine("CL: " + currentLine);
-							if (currentLine.IndexOf("newmtl") > -1)
-							{
-								currMTL = currentLine;
-							}
-							else if (currentLine.IndexOf("map_") > -1) //TODO make this better
-							{
-								if (currentLine.IndexOf(".tga") > -1)
-								{
-									images.Add(currMTL, System.Text.RegularExpressions.Regex.Replace(currentLine, "map_.*? ", "").Replace("\\", "/").Replace("tga", "png").Trim());
-									printError("CONVERT TO PNG!");
-								}
-								else {
-									if (currentLine.Trim().Split(' ').Length > 1)
-										//If it doesn't already containt that key
-										if (!images.ContainsKey(currMTL))
-											images.Add(currMTL, currentLine.Replace("map_Kd", "").Replace("\\", "/").Trim());
-								}
-							}
-						}
-					}
-					#endregion
-
-					//TODO Fix the empty newmtl
-					//Divide the length by 3
-					length = length / 3;
-
-					#region Face normals
-					double[][] faceNormals = new double[faces.Count][];
-					for (int j = 0; j < faces.Count; j++)
-					{
-						if (faces[j].Length > 2)
-						{
-							int[] currFace = faces[j];
-							//currFace[0*length] currFace[1 * length ] currFace[2*length]
-							double[] verts = toVertices(vertices[currFace[0 * length]], vertices[currFace[1 * length]], vertices[currFace[2 * length]]);
-
-							/*The cross product of two sides of the triangle equals the surface normal.
-	  So, if V = P2 - P1 and W = P3 - P1, and N is the surface normal, then:
-      Nx = (Vy * Wz)−(Vz * Wy)
-	  Ny = (Vz * Wx)−(Vx * Wz)
-	  Nz = (Vx * Wy)−(Vy * Wx)
-*/
-							double Vx = verts[3] - verts[0];
-							double Vy = verts[4] - verts[1];
-							double Vz = verts[5] - verts[2];
-
-							double Wx = verts[6] - verts[0];
-							double Wy = verts[7] - verts[1];
-							double Wz = verts[8] - verts[2];
-
-							//Face Normals
-							double Nx = (Vy * Wz) - (Vz * Wy);
-							double Ny = (Vz * Wx) - (Vx * Wz);
-							double Nz = (Vx * Wy) - (Vy * Wx);
-							//Normals
-							faceNormals[j] = normalize(Nx, Ny, Nz);
-						}
-					}
-					#endregion
-
-					#region Bary coords and bones
-					var toLookup = new List<KeyValuePair<string, triAndVertIndex>>();
-					for (int j = faces.Count - 1; j >= 0; j--)
-					{
-						if (faces[j].Length > 2)
-						{
-							for (var vert = 0; vert < 3; vert++)
-							{
-								toLookup.Add(new KeyValuePair<string, triAndVertIndex>(vertices[faces[j][vert * length]], new triAndVertIndex { triIndex = j, vertIndex = vert }));
-							}
-						}
-					}
-					double[,] bary = new double[faces.Count, 3]; //Filled with: default( int )
-					const double threshold = 0.55;
-					const double addTo = 1 - threshold;
-					Lookup<string, triAndVertIndex> adj = (Lookup<string, triAndVertIndex>)toLookup.ToLookup((item) => item.Key, (item) => item.Value);
-					//Each face/triangle has 3 bary coords
-					//Lines:
-					for (int j = faces.Count - 1; j >= 0; j--)
-					{
-						if (faces[j].Length > 2)
-						{
-							IEnumerable<triAndVertIndex> matchingVertices0 = adj[vertices[faces[j][0]]];
-							IEnumerable<triAndVertIndex> matchingVertices1 = adj[vertices[faces[j][length]]];
-							IEnumerable<triAndVertIndex> matchingVertices2 = adj[vertices[faces[j][2 * length]]];
-							//2 Matching points
-							//TriIndex = triangle index of the adjacent triangle
-							bool noAdjVerts = true;
-							foreach (triAndVertIndex index in matchingVertices0)
-							{
-								noAdjVerts = false;
-								//Oh, yeah! It's working! (Magic!)
-								singleMatchingVertex(0, j, index);
-
-								foreach (triAndVertIndex otherIndex in matchingVertices1)
-								{
-									if (otherIndex.triIndex == index.triIndex)
-									{
-										double angleBetweenTriangles = Math.Abs(dotProcuct(faceNormals[j], faceNormals[otherIndex.triIndex]));
-										if (angleBetweenTriangles < threshold)
-										{
-											bary[j, 2] = 1;// angleBetweenTriangles + addTo;
-										}
-										break;
-									}
-								}
-							}
-							if (noAdjVerts)
-							{
-								bary[j, 1] = 1;
-								bary[j, 2] = 1;
-							}
-							noAdjVerts = true;
-							foreach (triAndVertIndex index in matchingVertices1)
-							{
-								noAdjVerts = false;
-								singleMatchingVertex(1, j, index);
-
-								foreach (triAndVertIndex otherIndex in matchingVertices2)
-								{
-									if (otherIndex.triIndex == index.triIndex)
-									{
-										double angleBetweenTriangles = Math.Abs(dotProcuct(faceNormals[j], faceNormals[otherIndex.triIndex]));
-										if (angleBetweenTriangles < threshold)
-										{
-											bary[j, 0] = 1;// TODO angleBetweenTriangles + addTo;
-										}
-										break;
-									}
-								}
-							}
-							if (noAdjVerts)
-							{
-								bary[j, 0] = 1;
-								bary[j, 2] = 1;
-							}
-							noAdjVerts = true;
-							foreach (triAndVertIndex index in matchingVertices2)
-							{
-								noAdjVerts = false;
-								singleMatchingVertex(2, j, index);
-								foreach (triAndVertIndex otherIndex in matchingVertices0)
-								{
-									if (otherIndex.triIndex == index.triIndex)
-									{
-										double angleBetweenTriangles = Math.Abs(dotProcuct(faceNormals[j], faceNormals[otherIndex.triIndex]));
-										if (angleBetweenTriangles < threshold)
-										{
-											bary[j, 1] = 1;// TODO angleBetweenTriangles + addTo;
-										}
-										break;
-									}
-								}
-							}
-							if (noAdjVerts)
-							{
-								bary[j, 0] = 1;
-								bary[j, 1] = 1;
-							}
-
-						}
-						//TODO Single matching points:						
-					}
-					#endregion
-
-
-					//Write to file
-					JSONFile.Write("model = [");
-					bool firstTime = true;
-					for (int j = 0; j < faces.Count; j++)
-					{
-						int[] currFace = faces[j];
-						if (currFace.Length == 1)
-						{
-							string image;
-							if (!images.ContainsKey(texNames[currFace[0]]))
-							{
-								image = "nonexistent.png";
-							}
-							else {
-								//Aww, yeah! That's what I call awesome code! 
-								image = images[texNames[currFace[0]]];
-							}
-							Console.WriteLine(image);
-							if (firstTime)
-							{
-								JSONFile.Write("[");
-								firstTime = false;
-							}
-							else {
-								JSONFile.Write("],\n[");
-							}
-							JSONFile.Write('"' + image + "\",");
-						}
-						else
-						{
-							string[] baryCoordsOfTri = toBary(bary[j, 0], bary[j, 1], bary[j, 2]);
-							//Triangle
-							for (int i = 0; i < 3; i++)
-							{
-								JSONFile.Write(vertices[currFace[i * length]]);
-
-
-								if (length == 2)
-								{
-									JSONFile.Write("," + uvs[currFace[i * length + 1]]);
-								}
-								else if (length == 3)
-								{
-									if (hasUvs)
-									{
-										JSONFile.Write("," + uvs[currFace[i * length + 1]]);
-									}
-									JSONFile.Write("," + normals[currFace[i * length + 2]]);
-								}
-
-								JSONFile.Write(baryCoordsOfTri[i]);
-								JSONFile.Write("," + bones[j][i]);
-
-								//Pawsome JS is perfectly capable of realizing that the trailing commas aren't part of the array!
-								JSONFile.Write(',');
-							}
-						}
-					}
-
-
-					JSONFile.Write("]];");
-					JSONFile.Close();
-
-
-					StreamWriter bonesFile = File.CreateText("./obj/outputBones.txt");
-					//You are going to have to reorder the parts manually
-					bonesFile.Write("\nbones = [");
-					for (int i = 0; i < boneNames.Count; i++)
-					{
-						//pitch/yaw or something else..?
-						// ",pos:[0,0,0],pitch:0,yaw:0},"
-						bonesFile.WriteLine("{name:\"" + boneNames[i] + "\",index:" + i + ",parent:-1},");
-					}
-
-					bonesFile.Write("];");
-					bonesFile.Close();
-					//TODO add info about how the model is structured
-					Console.WriteLine("Vertex count: " + vertices.Count);
-					Console.WriteLine("UVs count: " + uvs.Count);
-					Console.WriteLine("Normals count: " + normals.Count);
-					Console.WriteLine("Face count: " + faces.Count);
-					Console.WriteLine("Length: " + length);
-
-
-
-					try { File.Delete("./obj/output.js"); } catch (Exception e) { };
-					try { File.Delete("./obj/outputBones.js"); } catch (Exception e) { };
-					File.Move("./obj/output.txt", Path.ChangeExtension("./obj/output.txt", ".js"));
-					File.Move("./obj/outputBones.txt", Path.ChangeExtension("./obj/outputBones.txt", ".js"));
-				}
-				else
-				{
-					printError("Obj files don't exist");
-				}
-
 			}
 			else
 			{
@@ -468,9 +57,331 @@ namespace FileTest
 				Directory.CreateDirectory("./obj");
 			}
 
+			//File Input
+			string fileName = "./obj/" + getUserInput("OBJ / MTL file name");
+
+			if (fileName == "./obj/")
+			{
+				string[] possibleFiles = Directory.GetFiles("./obj");
+				foreach (string currFileName in possibleFiles)
+				{
+					if (currFileName.EndsWith(".obj") && File.Exists(currFileName.Replace(".obj", ".mtl")))
+					{
+						fileName = currFileName;
+						break;
+					}
+				}
+			}
+
+			fileName = fileName.Replace(".mtl", "").Replace(".obj", "");
+
+
+			//If it exists, read it
+			if (!File.Exists(fileName + ".obj") || !File.Exists(fileName + ".mtl"))
+			{
+				printError("Obj file doesn't exist");
+				return;
+			}
+			Console.WriteLine("Files found, starting to read them");
+
+			try { File.Delete("./obj/output.txt"); }
+			catch (Exception e)
+			{
+				printError("No file to delete, ignore this error" + e);
+			}
+			//Create a new importer
+			AssimpContext importer = new AssimpContext();
+			importer.SetConfig(new IFCUseCustomTriangulationConfig(true));
+			//This is how we add a configuration (each config is its own class)
+			//NormalSmoothingAngleConfig config = new NormalSmoothingAngleConfig(66.0f);
+			//importer.SetConfig(config);
+
+			//This is how we add a logging callback 
+			LogStream logstream = new LogStream(delegate (String msg, String userData)
+			{
+				Console.WriteLine(msg);
+			});
+			logstream.Attach();
+
+			//Import the model. All configs are set. The model
+			//is imported, loaded into managed memory. Then the unmanaged memory is released, and everything is reset.
+			//Triangulating is already being done
+			//TODO aiProcess_JoinIdenticalVertices (Index buffer objects)
+			scene = importer.ImportFile(fileName + ".obj", PostProcessPreset.TargetRealTimeMaximumQuality | PostProcessSteps.FlipUVs | PostProcessSteps.OptimizeMeshes);
+			parseNode(scene.RootNode);
+			//End of example
+			importer.Dispose();
+			adjVert = (Lookup<Vector3D, triAndVertIndex>)toLookup.ToLookup((item) => item.Key, (item) => item.Value);
+			double THRESHOLD = Math.Cos(134.43 * Math.PI/180);
+
+			//Edit
+			/*
+			#region Bary coords and bones
+			
+			double[,] bary = new double[faces.Count, 3]; //Filled with: default( int )
+			
+			const double addTo = 1 - THRESHOLD;
+			Lookup<string, triAndVertIndex> adj = (Lookup<string, triAndVertIndex>)toLookup.ToLookup((item) => item.Key, (item) => item.Value);
+			//Each face/triangle has 3 bary coords
+			//Lines:
+			for (int j = faces.Count - 1; j >= 0; j--)
+			{
+				if (faces[j].Length > 2)
+				{
+					IEnumerable<triAndVertIndex> matchingVertices0 = adj[vertices[faces[j][0]]];
+					IEnumerable<triAndVertIndex> matchingVertices1 = adj[vertices[faces[j][length]]];
+					IEnumerable<triAndVertIndex> matchingVertices2 = adj[vertices[faces[j][2 * length]]];
+					//2 Matching points
+					//TriIndex = triangle index of the adjacent triangle
+					bool noAdjVerts = true;
+					foreach (triAndVertIndex index in matchingVertices0)
+					{
+						noAdjVerts = false;
+						//Oh, yeah! It's working! (Magic!)
+						singleMatchingVertex(0, j, index);
+
+						foreach (triAndVertIndex otherIndex in matchingVertices1)
+						{
+							if (otherIndex.triIndex == index.triIndex)
+							{
+								double angleBetweenTriangles = Math.Abs(dotProcuct(faceNormals[j], faceNormals[otherIndex.triIndex]));
+								if (angleBetweenTriangles < threshold)
+								{
+									bary[j, 2] = 1;// angleBetweenTriangles + addTo;
+								}
+								break;
+							}
+						}
+					}
+					if (noAdjVerts)
+					{
+						bary[j, 1] = 1;
+						bary[j, 2] = 1;
+					}
+					noAdjVerts = true;
+					foreach (triAndVertIndex index in matchingVertices1)
+					{
+						noAdjVerts = false;
+						singleMatchingVertex(1, j, index);
+
+						foreach (triAndVertIndex otherIndex in matchingVertices2)
+						{
+							if (otherIndex.triIndex == index.triIndex)
+							{
+								double angleBetweenTriangles = Math.Abs(dotProcuct(faceNormals[j], faceNormals[otherIndex.triIndex]));
+								if (angleBetweenTriangles < threshold)
+								{
+									bary[j, 0] = 1;// TODO angleBetweenTriangles + addTo;
+								}
+								break;
+							}
+						}
+					}
+					if (noAdjVerts)
+					{
+						bary[j, 0] = 1;
+						bary[j, 2] = 1;
+					}
+					noAdjVerts = true;
+					foreach (triAndVertIndex index in matchingVertices2)
+					{
+						noAdjVerts = false;
+						singleMatchingVertex(2, j, index);
+						foreach (triAndVertIndex otherIndex in matchingVertices0)
+						{
+							if (otherIndex.triIndex == index.triIndex)
+							{
+								double angleBetweenTriangles = Math.Abs(dotProcuct(faceNormals[j], faceNormals[otherIndex.triIndex]));
+								if (angleBetweenTriangles < threshold)
+								{
+									bary[j, 1] = 1;// TODO angleBetweenTriangles + addTo;
+								}
+								break;
+							}
+						}
+					}
+					if (noAdjVerts)
+					{
+						bary[j, 0] = 1;
+						bary[j, 1] = 1;
+					}
+
+				}
+				//TODO Single matching points:						
+			}
+			#endregion
+			*/
+
+			//Create the output file
+			StreamWriter JSONFile = File.CreateText("./obj/output.txt");
+			//Write to file
+			JSONFile.Write("model = [");
+			bool firstTime = true;
+			for (int j = 0, texCount = 0; j < vertices.Count; j++)
+			{
+				Vector3D[] currVert = Program.vertices[j];
+				if (currVert.Length == 1)
+				{
+
+					if (firstTime)
+					{
+						JSONFile.Write("[");
+						firstTime = false;
+					}
+					else
+					{
+						JSONFile.Write("],\n[");
+					}
+					JSONFile.Write('"' + texNames[(int)currVert[0].X] + "\",");
+					texCount++;
+				}
+				else
+				{
+					//Edit
+					string[] baryCoordsOfTri = new string[0];//toBary(bary[j, 0], bary[j, 1], bary[j, 2]);
+					//Triangle
+					for (int i = 0; i < 3; i++)
+					{
+						JSONFile.Write(Vec3DToString(currVert[i]));
+						JSONFile.Write(UVToString(Program.uvs[j - texCount][i]));
+						JSONFile.Write(Vec3DToString(Program.normals[j - texCount][i]));
+
+						JSONFile.Write(baryCoordsOfTri[i]);
+						JSONFile.Write("," + bones[j - texCount][i]);
+
+						//Pawsome JS is perfectly capable of realizing that the trailing commas aren't part of the array!
+						JSONFile.Write(',');
+					}
+				}
+			}
+
+
+			JSONFile.Write("]];");
+			JSONFile.Close();
+
+
+			StreamWriter bonesFile = File.CreateText("./obj/outputBones.txt");
+			//You are going to have to reorder the parts manually
+			bonesFile.Write("\nbones = [");
+			for (int i = 0; i < boneNames.Count; i++)
+			{
+				//pitch/yaw or something else..?
+				// ",pos:[0,0,0],pitch:0,yaw:0},"
+				bonesFile.WriteLine("{name:\"" + boneNames[i] + "\",index:" + i + ",parent:-1},");
+			}
+
+			bonesFile.Write("];");
+			bonesFile.Close();
+
+			try { File.Delete("./obj/output.js"); } catch (Exception) { };
+			try { File.Delete("./obj/outputBones.js"); } catch (Exception) { };
+			File.Move("./obj/output.txt", Path.ChangeExtension("./obj/output.txt", ".js"));
+			File.Move("./obj/outputBones.txt", Path.ChangeExtension("./obj/outputBones.txt", ".js"));
+
 
 			Console.WriteLine("DONE!");
 			Console.Read();
+		}
+
+		static string prevMaterial = "";
+		static void parseNode(Node currentNode)
+		{
+			if (currentNode.HasMeshes)
+			{
+				//Console.Write(currentNode.Name);
+				foreach (int index in currentNode.MeshIndices)
+				{
+					Mesh mesh = scene.Meshes[index];
+					//mesh.MaterialIndex
+					//scene.Materials
+					//Console.WriteLine("Material: " + scene.Materials[mesh.MaterialIndex].Name);
+					if (mesh.HasNormals && mesh.TextureCoordinateChannelCount > 0)
+					{
+						if (prevMaterial != scene.Materials[mesh.MaterialIndex].Name)
+						{
+							prevMaterial = scene.Materials[mesh.MaterialIndex].Name;
+							vertices.Add(new Vector3D[1] { new Vector3D(texNames.Count, 0, 0) });
+							int numberOfTextures = scene.Materials[mesh.MaterialIndex].GetAllMaterialTextures().Length;
+							string texFilePath;
+							if (numberOfTextures > 0)
+							{
+								texFilePath = scene.Materials[mesh.MaterialIndex].GetAllMaterialTextures()[0].FilePath;
+								if (numberOfTextures > 1)
+								{
+									//TODO
+									foreach (TextureSlot tex in scene.Materials[mesh.MaterialIndex].GetAllMaterialTextures())
+									{
+										if (texFilePath != tex.FilePath)
+										{
+											printError("TEX Name: " + tex.FilePath);
+											printError("more than one texture");
+											Debugger.Break();
+										}
+									}
+								}
+							}
+							else
+							{
+								printError("No texture");
+								//No texture, TODO
+								texFilePath = "nonexistent.png";
+							}
+
+							string color = ",1,1,1";
+							if (scene.Materials[mesh.MaterialIndex].HasColorAmbient)
+							{
+								color = "," + scene.Materials[mesh.MaterialIndex].ColorAmbient.R + "," + scene.Materials[mesh.MaterialIndex].ColorAmbient.G + "," + scene.Materials[mesh.MaterialIndex].ColorAmbient.B;
+							}
+							else if (scene.Materials[mesh.MaterialIndex].HasColorDiffuse)
+							{
+								color = "," + scene.Materials[mesh.MaterialIndex].ColorDiffuse.R + "," + scene.Materials[mesh.MaterialIndex].ColorDiffuse.G + "," + scene.Materials[mesh.MaterialIndex].ColorDiffuse.B;
+							}
+							texNames.Add(texFilePath + color);
+
+						}
+						//Console.WriteLine(mesh.Vertices.Count + ":" + mesh.Normals.Count + ":" + mesh.VertexCount + ":" + mesh.TextureCoordinateChannels[0].Count);
+						foreach (Face face in mesh.Faces)
+						{
+							Debug.Assert(face.IndexCount == 3, "Not triangulated face");
+
+							Vector3D[] points = new Vector3D[] { mesh.Vertices[face.Indices[0]], mesh.Vertices[face.Indices[1]], mesh.Vertices[face.Indices[2]] };
+							vertices.Add(points);
+							//Vector3Ds with z = 0
+							uvs.Add(new Vector3D[] { mesh.TextureCoordinateChannels[0][face.Indices[0]], mesh.TextureCoordinateChannels[0][face.Indices[1]], mesh.TextureCoordinateChannels[0][face.Indices[2]] });
+							normals.Add(new Vector3D[] { mesh.Normals[face.Indices[0]], mesh.Normals[face.Indices[1]], mesh.Normals[face.Indices[2]] });
+
+							Vector3D U = points[1] - points[0];
+							Vector3D V = points[2] - points[0];
+							Vector3D faceNormal = Vector3D.Cross(U, V);
+							faceNormal.Normalize();
+							
+							//TODO make coordinates less precise
+							/*
+							toLookup.Add(
+								new KeyValuePair<Vector3D, triAndVertIndex>(points[0], new triAndVertIndex { triIndex = face.Indices[0], vertIndex = 0 }));
+							toLookup.Add(
+								new KeyValuePair<Vector3D, triAndVertIndex>(points[1], new triAndVertIndex { triIndex = face.Indices[1], vertIndex = 1 }));
+							toLookup.Add(
+								new KeyValuePair<Vector3D, triAndVertIndex>(points[2], new triAndVertIndex { triIndex = face.Indices[2], vertIndex = 2 }));
+								*/
+
+							toLookup.Add(
+									new KeyValuePair<Vector3D, triAndVertIndex>(points[0], new triAndVertIndex { triIndex = faceNormals.Count, vertIndex = 0 }));
+							toLookup.Add(
+								new KeyValuePair<Vector3D, triAndVertIndex>(points[1], new triAndVertIndex { triIndex = faceNormals.Count, vertIndex = 1 }));
+							toLookup.Add(
+								new KeyValuePair<Vector3D, triAndVertIndex>(points[2], new triAndVertIndex { triIndex = faceNormals.Count, vertIndex = 2 }));
+							faceNormals.Add(faceNormal);
+						}
+					}
+				}
+			}
+
+			//Parse all the other nodes
+			for (int i = 0; i < currentNode.ChildCount; i++)
+			{
+				parseNode(currentNode.Children[i]);
+			}
 		}
 
 		/// <summary>
@@ -493,24 +404,6 @@ namespace FileTest
 			Console.ForegroundColor = ConsoleColor.Red;
 			Console.Error.WriteLine(errorMessage);
 			Console.ForegroundColor = previousColor;
-		}
-
-		static double[] toVertices(params string[] toConvert)
-		{
-			return Array.ConvertAll(string.Join(",", toConvert).Split(','), l => double.Parse(l)); //Lambda!
-		}
-
-		static double[] normalize(double x, double y, double z)
-		{
-			double length = Math.Sqrt(x * x + y * y + z * z);
-			// make sure we don't divide by 0.
-			if (length > 0.00001)
-			{
-				return new double[] { x / length, y / length, z / length };
-			}
-			else {
-				return new double[] { 0, 0, 0 };
-			}
 		}
 
 		static double dotProcuct(double[] array1, double[] array2)
@@ -571,7 +464,15 @@ namespace FileTest
 			}
 			return baryString;
 		}
+		static string Vec3DToString(Vector3D vec)
+		{
+			return "," + vec.X + "," + vec.Y + "," + vec.Z;
+		}
 
+		static string UVToString(Vector3D vec)
+		{
+			return "," + vec.X + "," + vec.Y;
+		}
 		static void singleMatchingVertex(int vertexIndex, int j, triAndVertIndex otherIndex)
 		{
 			if (bones[j][vertexIndex] != bones[otherIndex.triIndex][otherIndex.vertIndex])
