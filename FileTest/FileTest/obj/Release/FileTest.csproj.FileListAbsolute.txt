@@ -1,0 +1,6 @@
+C:\Stefan\HTL\SchoolServer\C#\FileTest\FileTest\bin\Release\FileTest.exe.config
+C:\Stefan\HTL\SchoolServer\C#\FileTest\FileTest\bin\Release\FileTest.exe
+C:\Stefan\HTL\SchoolServer\C#\FileTest\FileTest\bin\Release\FileTest.pdb
+C:\Stefan\HTL\SchoolServer\C#\FileTest\FileTest\obj\Release\FileTest.exe
+C:\Stefan\HTL\SchoolServer\C#\FileTest\FileTest\obj\Release\FileTest.pdb
+C:\Stefan\HTL\SchoolServer\C#\FileTest\FileTest\obj\Release\FileTest.csprojResolveAssemblyReference.cache
