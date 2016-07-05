@@ -27,10 +27,8 @@ namespace FileTest
         static List<Vector3D[]> vertices = new List<Vector3D[]>();
         static List<Vector3D[]> uvs = new List<Vector3D[]>();
         static List<Vector3D[]> normals = new List<Vector3D[]>();
-        /// <summary>
-        /// Not stored in pairs of 3/triangles
-        /// </summary>
-        static List<VertBone> bones = new List<VertBone>();
+        static List<VertBone[]> bones = new List<VertBone[]>();
+
         /// <summary>
         /// Texture names, if the vertices have only 1 element, a new texture will be used
         /// </summary>
@@ -47,8 +45,8 @@ namespace FileTest
         static readonly double THRESHOLD = -Math.Cos(134.43 * Math.PI / 180);
         //Each vertex has a bone
 
-        //TODO Bone offsets and stuff
-        static Dictionary<string, BoneInfo> boneNodes = new Dictionary<string, BoneInfo>();
+        static Dictionary<string, BoneInfo> boneNodesDictionary = new Dictionary<string, BoneInfo>();
+        static List<BoneInfo> boneNodesList = new List<BoneInfo>();
 
         static Scene scene;
 
@@ -111,9 +109,11 @@ namespace FileTest
             //Triangulating is already being done
             //TODO aiProcess_JoinIdenticalVertices (Index buffer objects)
             scene = importer.ImportFile(fileName, PostProcessPreset.TargetRealTimeMaximumQuality | PostProcessSteps.FlipUVs | PostProcessSteps.OptimizeMeshes | PostProcessSteps.SortByPrimitiveType);
-            parseNode(scene.RootNode);
-            //TODO Get all the relevant nodes and create a bone tree!
+
+            extractBones(scene.RootNode);
             createBoneTree(scene.RootNode, -1, Matrix4x4.Identity);
+
+            parseNode(scene.RootNode);
             //End of example
             importer.Dispose();
             adjVert = (Lookup<Vector3D, triAndVertIndex>)toLookup.ToLookup((item) => item.Key, (item) => item.Value);
@@ -261,7 +261,6 @@ namespace FileTest
             }
             #endregion
 
-
             //Create the output file
             StreamWriter JSONFile = File.CreateText("./obj/output.txt");
             //Write to file
@@ -298,7 +297,7 @@ namespace FileTest
 
                         JSONFile.Write(baryCoordsOfTri[i]);
                         //TODO Output bone IDs
-                        JSONFile.Write("," + bones[j - texCount + i].BoneIDs[0]/*.Weights[0]*/);
+                        JSONFile.Write("," + bones[j - texCount][i].BoneIDs[0] + "," + bones[j - texCount][i].Weights[0]);
                     }
                 }
             }
@@ -312,13 +311,17 @@ namespace FileTest
             //You are going to have to reorder the parts manually
             bonesFile.Write("\nbones = [");
 
-            foreach (KeyValuePair<string, BoneInfo> boneNode in boneNodes)
+            foreach (BoneInfo boneNode in boneNodesList)
             {
-                //TODO Output bones, already ordered correctly!
-                //pitch/yaw or something else..?
-                // ",pos:[0,0,0],pitch:0,yaw:0},"
-                //TODO Number of bones
-                bonesFile.WriteLine("{name:\"" + boneNode.Key + "\",index:" + boneNode.Value.BoneID + ",parent:" + boneNode.Value.Parent + ",pos:[" + "],rot:[" + "]},");
+                //TODO Number of bones (To nearest power of 2)
+                //TODO Max number of influencing bones per vertex
+                Quaternion rot;
+                Vector3D translation;
+                boneNode.BoneOffsetMatrix.DecomposeNoScaling(out rot, out translation); //Not sure if this is correct, 2 matrices were already multiplied
+                //Don't use .ToString(), use a custom function!
+                bonesFile.WriteLine(
+                    "{name:\"" + boneNode.Name + "\",parent:" + boneNode.Parent +
+                    ",pos:[" + Vec3DToString(translation, false) + "],qRot:[" + QuaternionToString(rot) + "],dualq:false},");
             }
 
             bonesFile.Write("];");
@@ -334,16 +337,58 @@ namespace FileTest
             Console.Read();
         }
 
+        /// <summary>
+        /// Extract all bones
+        /// Sets the Name and BoneOffsetMatrix
+        /// </summary>
+        static void extractBones(Node currentNode)
+        {
+            if (currentNode.HasMeshes)
+            {
+                //Console.Write(currentNode.Name);
+                foreach (int index in currentNode.MeshIndices)
+                {
+                    Mesh mesh = scene.Meshes[index];
+
+                    foreach (Bone currBone in mesh.Bones)
+                    {
+                        if (boneNodesDictionary.ContainsKey("currBone.Name"))
+                        {
+                            Debugger.Break();
+                            //TODO Implement the case where a bone node is referenced multiple times
+                        }
+                        else
+                        {
+                            boneNodesDictionary[currBone.Name] = new BoneInfo { Name = currBone.Name, BoneOffsetMatrix = currBone.OffsetMatrix };
+                            Debug.Assert(currBone.Name != "" && currBone.Name != null, "Error, the bone name is invalid: " + currBone.Name);
+                        }
+                    }
+                }
+            }
+
+            for (int i = 0; i < currentNode.ChildCount; i++)
+            {
+                extractBones(currentNode.Children[i]);
+            }
+        }
+
         static void createBoneTree(Node currentNode, int parentBoneID, Matrix4x4 accumulatedMatrix)
         {
             accumulatedMatrix = accumulatedMatrix * currentNode.Transform;
-            if (boneNodes.ContainsKey(currentNode.Name))
+            if (boneNodesDictionary.ContainsKey(currentNode.Name))
             {
-                boneNodes[currentNode.Name].AddNodeMatrix(accumulatedMatrix);
-                boneNodes[currentNode.Name].Parent = parentBoneID;
+                //Set the matrix, parent and the ID
+                boneNodesDictionary[currentNode.Name].AddNodeMatrix(accumulatedMatrix);
+                boneNodesDictionary[currentNode.Name].Parent = parentBoneID;
+                boneNodesDictionary[currentNode.Name].BoneID = boneNodesList.Count;
+
+                //Reset the matrix
                 accumulatedMatrix = Matrix4x4.Identity;
-                parentBoneID = boneNodes[currentNode.Name].BoneID;
-                //TODO
+                //Set the parent bone ID to the current bone ID
+                parentBoneID = boneNodesList.Count; //Should work
+
+                //Add the bone node to the list as well (nice and ordered! :D)
+                boneNodesList.Add(boneNodesDictionary[currentNode.Name]);
             }
 
             for (int i = 0; i < currentNode.ChildCount; i++)
@@ -352,7 +397,7 @@ namespace FileTest
             }
         }
 
-        static int numberOfBones = 0;
+
         static string prevMaterial = "";
         static void parseNode(Node currentNode)
         {
@@ -363,7 +408,6 @@ namespace FileTest
                 {
                     Mesh mesh = scene.Meshes[index];
 
-                    //TODO bones
                     //TODO mesh doesn't have bones attached case
                     //mesh.MaterialIndex
                     //scene.Materials
@@ -373,29 +417,17 @@ namespace FileTest
                     VertBone[] currBones = new VertBone[mesh.FaceCount * 3];
                     foreach (Bone currBone in mesh.Bones)
                     {
-                        if (boneNodes.ContainsKey("currBone.Name"))
+                        foreach (VertexWeight vertBone in currBone.VertexWeights)
                         {
-                            Debugger.Break();
-                            //TODO Implement the case where a bone node is referenced multiple times
-                        }
-                        else
-                        {
-                            boneNodes[currBone.Name] = new BoneInfo { BoneOffsetMatrix = currBone.OffsetMatrix, BoneID = numberOfBones };
-                            Debug.Assert(currBone.Name != "" && currBone.Name != null, "Error, the bone name is invalid: " + currBone.Name);
-                            foreach (VertexWeight vertBone in currBone.VertexWeights)
+                            //Temp array, will get converted a bit later on
+                            if (currBones[vertBone.VertexID] == null)
                             {
-                                //Temp array, will get converted a bit later on
-                                if (currBones[vertBone.VertexID] == null)
-                                {
-                                    currBones[vertBone.VertexID] = new VertBone();
-                                }
-                                //TODO Get the ID of the current bone, different mesh.Bones can refer to the same (Bone)Node
-                                currBones[vertBone.VertexID].AddBone(vertBone.Weight, numberOfBones);
-                                //vertBone.VertexID
+                                currBones[vertBone.VertexID] = new VertBone();
                             }
-                            numberOfBones++;
-
+                            currBones[vertBone.VertexID].AddBone(vertBone.Weight, boneNodesDictionary[currBone.Name].BoneID);
+                            //vertBone.VertexID
                         }
+
                     }
 
                     #endregion
@@ -467,9 +499,7 @@ namespace FileTest
                         uvs.Add(new Vector3D[] { mesh.TextureCoordinateChannels[0][indexX], mesh.TextureCoordinateChannels[0][indexY], mesh.TextureCoordinateChannels[0][indexZ] });
                         normals.Add(new Vector3D[] { mesh.Normals[indexX], mesh.Normals[indexY], mesh.Normals[indexZ] });
                         //Conversion, vertex IDs are taken care of
-                        bones.Add(currBones[indexX]);
-                        bones.Add(currBones[indexY]);
-                        bones.Add(currBones[indexZ]);
+                        bones.Add(new VertBone[] { currBones[indexX], currBones[indexY], currBones[indexZ] });
 
                         Vector3D U = points[1] - points[0];
                         Vector3D V = points[2] - points[0];
@@ -531,6 +561,7 @@ namespace FileTest
             printError(errorMessage);
             Debugger.Break();
         }
+
         static double dotProcuct(double[] array1, double[] array2)
         {
 
@@ -613,9 +644,15 @@ namespace FileTest
             }
             return baryString;
         }
-        static string Vec3DToString(Vector3D vec)
+
+        static string QuaternionToString(Quaternion rot)
         {
-            return "," + vec.X + "," + vec.Y + "," + vec.Z;
+            return rot.W + "," + rot.X + "," + rot.Y + "," + rot.Z;
+        }
+
+        static string Vec3DToString(Vector3D vec, bool leadingComma = true)
+        {
+            return (leadingComma ? "," : "") + vec.X + "," + vec.Y + "," + vec.Z;
         }
 
         static string UVToString(Vector3D vec)
@@ -628,11 +665,13 @@ namespace FileTest
         public int triIndex;
         public int vertIndex;
     }
+
     class BoneInfo
     {
         private Matrix4x4 boneOffsetMatrix;
         private int boneID;
         private int parent;
+        private string name;
 
         public Matrix4x4 BoneOffsetMatrix
         {
@@ -673,9 +712,22 @@ namespace FileTest
             }
         }
 
+        public string Name
+        {
+            get
+            {
+                return name;
+            }
+
+            set
+            {
+                name = value;
+            }
+        }
+
         public void AddNodeMatrix(Matrix4x4 accumulatedMatrix)
         {
-            boneOffsetMatrix = accumulatedMatrix * boneOffsetMatrix;
+            boneOffsetMatrix = boneOffsetMatrix * accumulatedMatrix;
         }
     }
 
