@@ -52,6 +52,8 @@ namespace FileTest
 
         const int MAX_INFLUENCES = 4;
 
+        static int nullBonesC = 0; //TODO remove this counter
+
         public static void Main(string[] args)
         {
             //Dir
@@ -74,6 +76,18 @@ namespace FileTest
                 foreach (string currFileName in possibleFiles)
                 {
                     if (!currFileName.EndsWith(".txt") && !currFileName.EndsWith(".js"))
+                    {
+                        fileName = currFileName;
+                        break;
+                    }
+                }
+            }
+            else
+            {
+                string[] possibleFiles = Directory.GetFiles("./obj");
+                foreach (string currFileName in possibleFiles)
+                {
+                    if (!currFileName.Contains("fileName"))
                     {
                         fileName = currFileName;
                         break;
@@ -108,7 +122,7 @@ namespace FileTest
             //is imported, loaded into managed memory. Then the unmanaged memory is released, and everything is reset.
             //Triangulating is already being done
             //TODO aiProcess_JoinIdenticalVertices (Index buffer objects)
-            scene = importer.ImportFile(fileName, PostProcessPreset.TargetRealTimeMaximumQuality | PostProcessSteps.FlipUVs | PostProcessSteps.OptimizeMeshes | PostProcessSteps.SortByPrimitiveType);
+            scene = importer.ImportFile(fileName, PostProcessPreset.TargetRealTimeMaximumQuality | PostProcessSteps.FlipUVs | PostProcessSteps.OptimizeMeshes | PostProcessSteps.OptimizeGraph | PostProcessSteps.SortByPrimitiveType);
 
             extractBones(scene.RootNode);
             createBoneTree(scene.RootNode, -1, Matrix4x4.Identity);
@@ -260,6 +274,7 @@ namespace FileTest
                 }
             }
             #endregion
+#if false
 
             //Create the output file
             StreamWriter JSONFile = File.CreateText("./obj/output.txt");
@@ -282,6 +297,7 @@ namespace FileTest
                         JSONFile.Write("],\n[");
                     }
                     JSONFile.Write('"' + texNames[(int)currVert[0].X] + '"');
+                    Console.Write(texNames[(int)currVert[0].X] + "---");
                     texCount++;
                 }
                 else
@@ -297,7 +313,7 @@ namespace FileTest
 
                         JSONFile.Write(baryCoordsOfTri[i]);
                         //TODO Output bone IDs
-                        JSONFile.Write("," + bones[j - texCount][i].BoneIDs[0] + "," + bones[j - texCount][i].Weights[0]);
+                        JSONFile.Write("," + bones[j - texCount][i].BoneIDs[0]);/* + "," + bones[j - texCount][i].Weights[0]*/
                     }
                 }
             }
@@ -306,6 +322,7 @@ namespace FileTest
             JSONFile.Write("]];");
             JSONFile.Close();
 
+#endif
 
             StreamWriter bonesFile = File.CreateText("./obj/outputBones.txt");
             //You are going to have to reorder the parts manually
@@ -321,7 +338,8 @@ namespace FileTest
                 //Don't use .ToString(), use a custom function!
                 bonesFile.WriteLine(
                     "{name:\"" + boneNode.Name + "\",parent:" + boneNode.Parent +
-                    ",pos:[" + Vec3DToString(translation, false) + "],qRot:[" + QuaternionToString(rot) + "],dualq:false},");
+                    ",pos:[" + Vec3DToString(translation, false) + "],qRot:[" + QuaternionToString(rot) + "],dualq:false, mat:[" 
+                    + MatToString(boneNode.localMat) + "],boneMat:["+ MatToString (boneNode.BoneOffsetMatrix) + "]},");
             }
 
             bonesFile.Write("];");
@@ -329,10 +347,10 @@ namespace FileTest
 
             try { File.Delete("./obj/output.js"); } catch (Exception) { };
             try { File.Delete("./obj/outputBones.js"); } catch (Exception) { };
-            File.Move("./obj/output.txt", Path.ChangeExtension("./obj/output.txt", ".js"));
+            //File.Move("./obj/output.txt", Path.ChangeExtension("./obj/output.txt", ".js"));
             File.Move("./obj/outputBones.txt", Path.ChangeExtension("./obj/outputBones.txt", ".js"));
 
-
+            Console.WriteLine("Info: {0} Bones    {1} vertices without bones", boneNodesList.Count, nullBonesC);
             Console.WriteLine("DONE!");
             Console.Read();
         }
@@ -359,8 +377,13 @@ namespace FileTest
                         }
                         else
                         {
+                            //TODO Remove useless bones
                             boneNodesDictionary[currBone.Name] = new BoneInfo { Name = currBone.Name, BoneOffsetMatrix = currBone.OffsetMatrix };
                             Debug.Assert(currBone.Name != "" && currBone.Name != null, "Error, the bone name is invalid: " + currBone.Name);
+                            if (currBone.VertexWeightCount <= 1)
+                            {
+                                Debugger.Break();
+                            }
                         }
                     }
                 }
@@ -374,7 +397,7 @@ namespace FileTest
 
         static void createBoneTree(Node currentNode, int parentBoneID, Matrix4x4 accumulatedMatrix)
         {
-            accumulatedMatrix = accumulatedMatrix * currentNode.Transform;
+            accumulatedMatrix = currentNode.Transform * accumulatedMatrix;
             if (boneNodesDictionary.ContainsKey(currentNode.Name))
             {
                 //Set the matrix, parent and the ID
@@ -425,19 +448,11 @@ namespace FileTest
                                 currBones[vertBone.VertexID] = new VertBone();
                             }
                             currBones[vertBone.VertexID].AddBone(vertBone.Weight, boneNodesDictionary[currBone.Name].BoneID);
-                            //vertBone.VertexID
                         }
-
                     }
-
                     #endregion
 
                     #region Texture
-                    if (mesh.TextureCoordinateChannelCount <= 0)
-                    {
-                        PrintCrucialError("No textures");
-                    }
-
                     if (prevMaterial != scene.Materials[mesh.MaterialIndex].Name)
                     {
                         prevMaterial = scene.Materials[mesh.MaterialIndex].Name;
@@ -463,7 +478,7 @@ namespace FileTest
                         }
                         else
                         {
-                            printError("No texture");
+                            //No texture..
                             texFilePath = "nonexistent.png";
                         }
 
@@ -495,9 +510,36 @@ namespace FileTest
                         Vector3D[] points = new Vector3D[] { mesh.Vertices[indexX], mesh.Vertices[indexY], mesh.Vertices[indexZ] };
                         vertices.Add(points);
                         //Vector3Ds with z = 0
-                        //Only capable of handling one texture
-                        uvs.Add(new Vector3D[] { mesh.TextureCoordinateChannels[0][indexX], mesh.TextureCoordinateChannels[0][indexY], mesh.TextureCoordinateChannels[0][indexZ] });
+                        //TODO Fix only capable of handling one texture
+                        if (mesh.TextureCoordinateChannelCount <= 0)
+                        {
+                            uvs.Add(new Vector3D[] { new Vector3D(1), new Vector3D(1), new Vector3D(1) });
+                        }
+                        else
+                        {
+                            uvs.Add(new Vector3D[] { mesh.TextureCoordinateChannels[0][indexX], mesh.TextureCoordinateChannels[0][indexY], mesh.TextureCoordinateChannels[0][indexZ] });
+                        }
                         normals.Add(new Vector3D[] { mesh.Normals[indexX], mesh.Normals[indexY], mesh.Normals[indexZ] });
+
+                        if (currBones[indexX] == null)
+                        {
+                            currBones[indexX] = new VertBone();
+                            currBones[indexX].AddBone(1, -1);
+                            nullBonesC++;
+                        }
+                        if (currBones[indexY] == null)
+                        {
+                            currBones[indexY] = new VertBone();
+                            currBones[indexY].AddBone(1, -1);
+                            nullBonesC++;
+                        }
+                        if (currBones[indexZ] == null)
+                        {
+                            currBones[indexZ] = new VertBone();
+                            currBones[indexZ].AddBone(1, -1);
+                            nullBonesC++;
+                        }
+
                         //Conversion, vertex IDs are taken care of
                         bones.Add(new VertBone[] { currBones[indexX], currBones[indexY], currBones[indexZ] });
 
@@ -659,6 +701,15 @@ namespace FileTest
         {
             return "," + vec.X + "," + vec.Y;
         }
+
+        static string MatToString(Matrix4x4 mat)
+        {
+            mat.Transpose();
+            return mat.A1 + "," + mat.A2 + "," + mat.A3 + "," + mat.A4 +
+                "," + mat.B1 + "," + mat.B2 + "," + mat.B3 + "," + mat.B4 +
+                "," + mat.C1 + "," + mat.C2 + "," + mat.C3 + "," + mat.C4 +
+                "," + mat.D1 + "," + mat.D2 + "," + mat.D3 + "," + mat.D4;
+        }
     }
     struct triAndVertIndex
     {
@@ -669,6 +720,7 @@ namespace FileTest
     class BoneInfo
     {
         private Matrix4x4 boneOffsetMatrix;
+        public Matrix4x4 localMat;
         private int boneID;
         private int parent;
         private string name;
@@ -727,7 +779,8 @@ namespace FileTest
 
         public void AddNodeMatrix(Matrix4x4 accumulatedMatrix)
         {
-            boneOffsetMatrix = boneOffsetMatrix * accumulatedMatrix;
+            localMat = accumulatedMatrix;
+            //boneOffsetMatrix = boneOffsetMatrix * accumulatedMatrix; //Wrong?
         }
     }
 
@@ -762,7 +815,9 @@ namespace FileTest
                 _numberOfBones = value;
             }
         }
-
+        /// <summary>
+        /// IDs of the bones that deform the vertices
+        /// </summary>
         public int[] BoneIDs
         {
             get
